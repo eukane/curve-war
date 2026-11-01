@@ -1,12 +1,12 @@
 import { WAR_REGIONS } from "./data/start-regions";
 import { TURN_DAYS, turnOf } from "./sim/calendar";
-import { FORT_DENSITY_BONUS, EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
+import { FORT_DENSITY_BONUS, FORT_OFFSET_UNITS, EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
 import { EDICTS, cancelEdictResearch, edictOf, repealEdict, startEdict } from "./sim/edicts";
 import { profileOf } from "./sim/ai";
 import { KIND_NAME, buildInfo, canBuild, cancelBuild, fortMultipliers, roadFalloffMultipliers, startBuild } from "./sim/structures";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
-import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
+import { cloneWorld, createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
 import type { TurnPreview, TurnReport, World } from "./sim/world";
 import { advise } from "./ui/advisor";
 import { edictNumbers } from "./ui/edict-info";
@@ -266,7 +266,16 @@ function buildHtml(i: number): string {
   const rows = (["fort", "road"] as const).map((kind) => {
     const info = buildInfo(kind);
     const can = canBuild(world, "player", kind, i);
-    const what = kind === "fort" ? `이 구간 병력 밀도 최대 +${Math.round(FORT_DENSITY_BONUS * 100)}% (전선이 요새에 가까울 때)` : "이 구간 보급이 멀리까지 닿음";
+    let after = "";
+    if (kind === "fort" && can.ok) {
+      // 지금 전선이 그대로라고 가정하고, 요새가 완공되었을 때의 우리 밀도를 모델로 계산한다
+      const c = cloneWorld(world);
+      const x = c.war!.front[i]! - FORT_OFFSET_UNITS;
+      c.war!.structures.push({ id: -1, realm: "player", kind: "fort", sector: i, x, totalDays: 1, progressDays: 1, workers: 0, done: true });
+      const b4 = computePressure(world).playerDensity[i]!, af = computePressure(c).playerDensity[i]!;
+      after = ` 완공되면 우리 밀도 ${fmt(b4, 1)} → ${fmt(af, 1)} 명/km (전선이 지금 그대로일 때).`;
+    }
+    const what = (kind === "fort" ? `이 구간 병력 밀도 최대 +${Math.round(FORT_DENSITY_BONUS * 100)}% (전선이 요새에 가까울 때).${after}` : "이 구간 보급이 멀리까지 닿음");
     return `<div class="buildrow"><button data-build="${kind}" ${can.ok ? "" : "disabled"}>${KIND_NAME[kind]} 짓기</button><span class="mu">${what} · 인부 ${fmt(info.workers)}명 · ${info.days}일${can.ok ? "" : ` — <b>${esc(can.reason)}</b>`}</span></div>`;
   });
   return `<div class="builds"><h3>건설</h3>${rows.join("")}${busyField ? `<p class="note warnline">지금은 ${season} — 인부를 빼면 ${season === "봄" ? "파종" : "수확"} 일손이 줄어 곡식을 덜 거둡니다. 여름이나 겨울이 안전합니다.</p>` : ""}${buildListHtml()}</div>`;
