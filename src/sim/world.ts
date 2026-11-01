@@ -8,6 +8,7 @@ import {
   GRAIN_KG_PER_PERSON_DAY,
   HARVEST_DAY_OF_YEAR,
   HA_PER_FARMER,
+  MAP_W,
   SEED_KG_PER_HA,
   SOIL_OF_CLEARED_LAND,
   SOWING_DAY_OF_YEAR,
@@ -22,6 +23,7 @@ import { EVENTS } from "./events";
 import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
+import { aiPlan, beginMonth, disbandTroops, endMonth, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
   clearingWorkersAt,
@@ -34,10 +36,11 @@ import type { Checkpoint, Decision, Metrics, PendingEvent, Region, RegionSeed, S
 
 export * from "./state";
 
-export function createWorld(seed: number, seeds: RegionSeed[]): World {
-  return {
+export function createWorld(seed: number, seeds: RegionSeed[], opts?: { war?: { playerRegionId: number; rivalRegionId: number } }): World {
+  const w: World = {
     seed,
     day: 0,
+    war: opts?.war ? newWarState(opts.war.playerRegionId, opts.war.rivalRegionId) : null,
     log: [],
     decisions: [],
     pending: null,
@@ -59,6 +62,8 @@ export function createWorld(seed: number, seeds: RegionSeed[]): World {
       lastDemography: null,
     })),
   };
+  if (w.war) beginMonth(w);
+  return w;
 }
 
 /** 그 해의 기상 계수. (시드, 해, 지역)만으로 결정되므로 호출 순서와 무관하다. */
@@ -221,6 +226,33 @@ export function stopClearing(w: World, regionId: number): CommandResult {
   return { ok: true };
 }
 
+export function levy(w: World, regionId: number, n: number): CommandResult {
+  const r = w.regions.find((x) => x.id === regionId);
+  if (!r) return { ok: false, reason: "없는 지역입니다." };
+  if (!(n >= 1)) return { ok: false, reason: "징집은 1명 이상이어야 합니다." };
+  const took = levyTroops(r, n);
+  if (took < 1) return { ok: false, reason: "더 징집할 수 없습니다(농민의 40%가 상한이고, 최소한의 농민은 남겨야 합니다)." };
+  addLog(w, r.id, "player", `농민 ${fmt(took)}명을 징집했다. 병력 ${fmt(soldiersOf(r))}명.`);
+  return { ok: true };
+}
+
+export function disband(w: World, regionId: number, n: number): CommandResult {
+  const r = w.regions.find((x) => x.id === regionId);
+  if (!r) return { ok: false, reason: "없는 지역입니다." };
+  const gave = disbandTroops(r, n);
+  if (gave < 1) return { ok: false, reason: "해산할 병사가 없습니다." };
+  addLog(w, r.id, "player", `병사 ${fmt(gave)}명을 해산해 농민으로 돌려보냈다. 병력 ${fmt(soldiersOf(r))}명.`);
+  return { ok: true };
+}
+
+/** 플레이어가 전선 점 i의 명령선을 정한다. 절대 x좌표. */
+export function setOrder(w: World, i: number, x: number): void {
+  const war = w.war;
+  if (!war) return;
+  if (i < 0 || i >= war.orders.player.length) return;
+  war.orders.player[i] = Math.min(MAP_W - 12, Math.max(war.capitals.player.x + 5, x));
+}
+
 /* ------------------------------------------------------------------ */
 /* 예측                                                                */
 /* ------------------------------------------------------------------ */
@@ -283,6 +315,56 @@ export function forecastSeries(
 
 export function forecast(w: World, regionId: number, days: number, mutate?: (c: World, r: Region) => void, scenario: ScenarioId = "normal"): Metrics {
   return forecastSeries(w, regionId, [{ days, label: "" }], mutate, scenario)[0]!.metrics;
+}
+
+export interface MonthPreview {
+  /** 이번 달이 끝났을 때의 전선 */
+  front: number[];
+  playerAreaHaDelta: number;
+  playerSoldiers: number;
+  rivalSoldiers: number;
+  playerCasualties: number;
+  rivalCasualties: number;
+  result: "win" | "loss" | null;
+  /** 이번 달 안에 점마다 움직이는 양(지도 단위, 양수 = 적 쪽) */
+  shifts: number[];
+  /** 이번 달에 적이 정한 명령선 */
+  rivalOrders: number[];
+}
+
+/**
+ * 다음 달 경계(30일 배수)까지 모델을 복제해 돌린다. 전황 변수는 평균(1.0)으로 고정하므로
+ * 실제 결과는 이 예측에서 ±12% 정도의 전투력 차이만큼 달라질 수 있다. 적의 반응(징집, 명령선)은 그대로 반영된다.
+ */
+export function previewMonth(w: World): MonthPreview | null {
+  if (!w.war) return null;
+  const c = cloneWorld(w);
+  c.eventsEnabled = false;
+  c.pending = null;
+  c.weatherOverride = () => 1.0;
+  c.war!.expected = true;
+  const days = DAYS_PER_MONTH - (w.day % DAYS_PER_MONTH);
+  const before = [...w.war!.front];
+  const startArea = playerAreaHa(w.war!.front);
+  const P0 = soldiersOf(w.regions.find((r) => r.id === w.war!.playerRegionId)!);
+  const R0 = soldiersOf(w.regions.find((r) => r.id === w.war!.rivalRegionId)!);
+  step(c, days);
+  void P0; void R0;
+  const war = c.war!;
+  const P = c.regions.find((r) => r.id === war.playerRegionId)!;
+  const R = c.regions.find((r) => r.id === war.rivalRegionId)!;
+  const lastReport = war.reports[war.reports.length - 1];
+  return {
+    front: [...war.front],
+    playerAreaHaDelta: playerAreaHa(war.front) - startArea,
+    playerSoldiers: soldiersOf(P),
+    rivalSoldiers: soldiersOf(R),
+    playerCasualties: lastReport ? lastReport.playerCasualties : 0,
+    rivalCasualties: lastReport ? lastReport.rivalCasualties : 0,
+    result: war.result,
+    shifts: war.front.map((x, i) => x - before[i]!),
+    rivalOrders: [...war.orders.rival],
+  };
 }
 
 /** 모든 시나리오의 예측을 한꺼번에 돌린다. */
@@ -387,7 +469,10 @@ function settleDecisions(w: World) {
 /** 하루를 진행한다. 사건이 열려 진행하지 못하면 false. */
 export function stepDay(w: World): boolean {
   if (w.pending) return false;
+  if (w.war?.result) return false;
   if (openPendingIfTriggered(w)) return false;
+  // 매달 초: 적이 병력과 명령선을 정한다
+  if (w.war && w.day % DAYS_PER_MONTH === 0) aiPlan(w);
 
   const { year, dayOfYear } = dateOf(w.day);
 
@@ -410,11 +495,18 @@ export function stepDay(w: World): boolean {
     r.monthEatenKg += eaten;
   }
 
+  // 5) 전쟁
+  stepWarDay(w);
+
   w.day += 1;
 
-  // 5) 매월 말 인구 변화
+  // 6) 매월 말 인구 변화와 월간 보고
   if (w.day % DAYS_PER_MONTH === 0) {
     for (const r of w.regions) applyMonthlyDemography(r);
+    if (w.war) {
+      endMonth(w);
+      beginMonth(w);
+    }
   }
 
   settleDecisions(w);
@@ -426,8 +518,10 @@ function applyMonthlyDemography(r: Region): void {
   const deficit = r.monthNeedKg > 0 ? 1 - r.monthEatenKg / r.monthNeedKg : 0;
   const monthShare = DAYS_PER_MONTH / DAYS_PER_YEAR;
 
+  // 병사는 아이를 낳지 않는다: 출생은 민간 인구에서만 나오고, 사망은 모두에게 같은 비율로 적용된다.
+  const civ = pop - popOf(r, "soldier");
   const suppression = Math.min(1, BIRTH_SUPPRESSION_PER_DEFICIT * deficit);
-  const baseBirths = (pop * BIRTHS_PER_1000_YEAR) / 1000 * monthShare;
+  const baseBirths = (civ * BIRTHS_PER_1000_YEAR) / 1000 * monthShare;
   const births = baseBirths * (1 - suppression);
 
   const baseDeaths = (pop * DEATHS_PER_1000_YEAR) / 1000 * monthShare;
@@ -435,8 +529,11 @@ function applyMonthlyDemography(r: Region): void {
   const deaths = Math.min(pop, baseDeaths + starvationDeaths);
   r.starvationDeathsTotal += Math.min(starvationDeaths, deaths);
 
-  const ratio = pop > 0 ? (pop + births - deaths) / pop : 1;
-  for (const c of r.cohorts) c.pop *= ratio;
+  const deathRatio = pop > 0 ? deaths / pop : 0;
+  for (const c of r.cohorts) {
+    const before = c.pop;
+    c.pop = before * (1 - deathRatio) + (c.stratum !== "soldier" && civ > 0 ? (births * before) / civ : 0);
+  }
 
   r.lastDeficit = deficit;
   r.lastDemography = {

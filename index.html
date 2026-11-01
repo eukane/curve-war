@@ -7,70 +7,136 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+KR:wght@400;500;700;900&display=swap" />
   <style>
     :root {
-      --bg: #e9eef2; --panel: #f8fafb; --fg: #12202c; --mu: #5a6b79; --line: #c3cfd9;
-      --a: #1f64d6; --good: #17794a; --bad: #c12a4a; --warn: #a56a00;
-      --mono: "IBM Plex Mono", ui-monospace, monospace; --sans: "Noto Sans KR", system-ui, sans-serif;
+      --bg:#e9eef2; --panel:#f8fafb; --fg:#12202c; --mu:#5a6b79; --line:#c3cfd9; --land:#e2e8e1; --grid:rgba(18,32,44,.07);
+      --a:#1f64d6; --rv:#c8324f; --good:#17794a; --bad:#c12a4a; --warn:#a56a00; --hot:#e0a100; --chance:#6b3fb5;
+      --mono:"IBM Plex Mono", ui-monospace, monospace; --sans:"Noto Sans KR", system-ui, sans-serif;
       color-scheme: light;
     }
     @media (prefers-color-scheme: dark) {
-      :root { --bg:#0b1218; --panel:#121c25; --fg:#e3ebf2; --mu:#8fa3b3; --line:#26384a; --a:#5ba4ff; --good:#4cc38a; --bad:#ff7a93; --warn:#f0b24a; color-scheme: dark; }
+      :root { --bg:#0b1218; --panel:#121c25; --fg:#e3ebf2; --mu:#8fa3b3; --line:#26384a; --land:#16221f; --grid:rgba(227,235,242,.07);
+        --a:#5ba4ff; --rv:#ff6d89; --good:#4cc38a; --bad:#ff7a93; --warn:#f0b24a; --hot:#ffc233; --chance:#b89bff; color-scheme: dark; }
     }
-    * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.6 var(--sans);
-      padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); padding-block:20px 56px; }
-    main { max-width:1040px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
-    h1 { margin:0; font-size:24px; font-weight:900; letter-spacing:-.01em; }
-    h1 small { font:400 12px var(--mono); color:var(--mu); margin-left:8px; letter-spacing:0; }
-    h2 { margin:0 0 8px; font-size:15px; font-weight:700; }
-    h3 { margin:12px 0 4px; font-size:13px; font-weight:700; }
-    .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
-    .grid2 { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:16px; }
-    @media (max-width:820px) { .grid2 { grid-template-columns:minmax(0,1fr); } }
-    section { background:var(--panel); border:1px solid var(--line); padding:14px 16px; border-radius:4px; min-width:0; }
-    button { font:inherit; padding:4px 12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); border-radius:3px; cursor:pointer; }
-    button:focus-visible, input:focus-visible { outline:2px solid var(--a); outline-offset:2px; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.55 var(--sans);
+      padding-left:max(14px, env(safe-area-inset-left, 0px)); padding-right:max(14px, env(safe-area-inset-right, 0px)); padding-block:14px 48px; }
+    .wrap { max-width:1280px; margin:0 auto; display:flex; flex-direction:column; gap:12px; }
+    h1 { margin:0; font-size:20px; font-weight:900; letter-spacing:-.01em; }
+    h2 { margin:0 0 6px; font-size:14px; font-weight:700; }
+    button { font:inherit; padding:5px 12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); border-radius:3px; cursor:pointer; }
+    button:hover:not(:disabled) { border-color:var(--fg); }
+    button:focus-visible, canvas:focus-visible, summary:focus-visible, input:focus-visible { outline:2px solid var(--a); outline-offset:2px; }
+    button.primary { background:var(--a); border-color:var(--a); color:#fff; font-weight:700; padding:7px 18px; }
+    button.primary:disabled { opacity:.5; cursor:not-allowed; }
     button[aria-pressed="true"] { background:var(--fg); color:var(--bg); border-color:var(--fg); }
-    button.primary { background:var(--a); color:#fff; border-color:var(--a); }
-    button:disabled { opacity:.45; cursor:not-allowed; }
+    .top { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; }
+    .top .left { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px; }
+    .date { font:500 14px var(--mono); color:var(--mu); }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; }
+    .chip { font:12px var(--mono); border:1px solid var(--line); background:var(--panel); padding:2px 9px; border-radius:3px; white-space:nowrap; }
+    .chip b { font-weight:500; }
+    .chip.bad { border-color:var(--bad); color:var(--bad); }
+    .chip.warn { border-color:var(--warn); color:var(--warn); }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .layout { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:12px; align-items:start; }
+    @media (max-width: 980px) { .layout { grid-template-columns:minmax(0,1fr); } }
+    section, details.box { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:11px 14px; min-width:0; }
+    .mapbox { padding:0; overflow:hidden; }
+    canvas#map { display:block; width:100%; touch-action:none; }
+    .maplegend { display:flex; flex-wrap:wrap; gap:4px 16px; padding:8px 12px; border-top:1px solid var(--line); font-size:12px; color:var(--mu); }
+    .maplegend i { display:inline-block; width:18px; height:0; border-top:3px solid; vertical-align:middle; margin-right:5px; }
+    .preview { padding:9px 12px; border-top:1px solid var(--line); font-size:13px; }
+    .side { display:flex; flex-direction:column; gap:12px; min-width:0; }
+    .adv { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+    .adv li { border-left:4px solid var(--line); padding:1px 0 1px 9px; }
+    .adv li b { display:block; font-size:13px; }
+    .adv li span { color:var(--mu); font-size:12.5px; }
+    .adv .danger { border-color:var(--bad); } .adv .danger b { color:var(--bad); }
+    .adv .warn { border-color:var(--warn); } .adv .warn b { color:var(--warn); }
+    .adv .chance { border-color:var(--chance); } .adv .chance b { color:var(--chance); }
+    .kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:2px 12px; font-size:13px; }
+    .kv dt { color:var(--mu); } .kv dd { margin:0; text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+    .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+    .mu { color:var(--mu); } .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+    .note { font-size:12px; color:var(--mu); }
+    .hint { background:var(--panel); border:1px dashed var(--a); border-radius:4px; padding:10px 14px; }
+    .hint ol { margin:4px 0 0; padding-left:20px; }
+    .reports { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:0; }
+    .reports li { padding:6px 0; border-top:1px solid var(--line); display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:10px; font-size:13px; }
+    .reports li:first-child { border-top:0; }
+    .reports li.empty { display:block; }
+    .reports time { font:12px var(--mono); color:var(--mu); }
+    details.box > summary { cursor:pointer; font-weight:700; }
     table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
     td, th { text-align:left; padding:3px 10px 3px 0; border-bottom:1px solid var(--line); vertical-align:top; }
     th { font-weight:500; color:var(--mu); font-size:12px; }
-    td.n, th.n { text-align:right; white-space:nowrap; }
-    td:first-child, th:first-child { white-space:nowrap; }
-    table.wide { min-width:560px; }
-    .mu { color:var(--mu); } .mono { font-family:var(--mono); } .good { color:var(--good); } .bad { color:var(--bad); } .warn { color:var(--warn); }
-    code { font:12px var(--mono); }
-    .wrapx { overflow-x:auto; }
-    .meter { height:8px; background:var(--line); border-radius:2px; overflow:hidden; margin:4px 0 2px; }
-    .meter > i { display:block; height:100%; background:var(--a); }
-    .field { display:grid; grid-template-columns:7em minmax(0,1fr) 7em; gap:8px; align-items:center; margin:6px 0; }
-    .field input[type=range] { width:100%; accent-color:var(--a); }
-    .field output { font:13px var(--mono); text-align:right; }
-    .log { max-height:260px; overflow:auto; margin:0; padding:0; list-style:none; }
-    .log li { padding:4px 0; border-bottom:1px solid var(--line); display:grid; grid-template-columns:8.5em minmax(0,1fr); gap:8px; }
-    .log li.empty { display:block; }
-    .log time { font:12px var(--mono); color:var(--mu); }
-    #modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:max(16px, env(safe-area-inset-top, 0px)) 16px 16px; overflow:auto; z-index:20; }
-    #modal[hidden] { display:none; }
-    #modal .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; width:min(820px,100%); padding:18px 20px; }
-    .opt { border:1px solid var(--line); border-radius:3px; padding:10px 12px; margin:10px 0; }
-    .opt .head { display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:6px; font-weight:700; }
-    .note { font-size:12px; color:var(--mu); }
+    td.n, th.n { text-align:right; white-space:nowrap; } td:first-child, th:first-child { white-space:nowrap; } table.wide { min-width:560px; }
+    .wrapx { overflow-x:auto; } .mono { font-family:var(--mono); } code { font:12px var(--mono); }
+    .meter { height:8px; background:var(--line); border-radius:2px; overflow:hidden; margin:4px 0 2px; } .meter > i { display:block; height:100%; background:var(--a); }
+    .field { display:grid; grid-template-columns:6em minmax(0,1fr) 6em; gap:8px; align-items:center; margin:6px 0; }
+    .field input[type=range] { width:100%; accent-color:var(--a); } .field output { font:13px var(--mono); text-align:right; }
+    .eco-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:10px; }
+    @media (max-width:820px) { .eco-grid { grid-template-columns:minmax(0,1fr); } }
+    #overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; padding:16px; z-index:30; }
+    #overlay[hidden] { display:none; }
+    #overlay .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:22px 26px; width:min(480px,100%); }
+    #overlay h2 { font-size:22px; }
+    #modal { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:16px; overflow:auto; z-index:20; }
+    #modal[hidden] { display:none; } #modal .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; width:min(820px,100%); padding:18px 20px; }
+    .opt { border:1px solid var(--line); border-radius:3px; padding:10px 12px; margin:10px 0; } .opt .head { display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; margin-bottom:6px; font-weight:700; }
+    h3 { margin:12px 0 4px; font-size:13px; font-weight:700; }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Curve War<small>M1.5 시험 화면 — 인구·식량·개간</small></h1>
-    <div class="row" id="controls" role="group" aria-label="시간 조작"></div>
-    <section><h2 id="date"></h2><div class="wrapx" id="summary"></div></section>
-    <section id="clear-section"><h2>개간 사업</h2><div id="clear-panel"></div></section>
-    <div class="grid2">
-      <section><h2>왜 이 값인가 — 올해 파종</h2><div class="wrapx" id="why-sow"></div></section>
-      <section><h2>왜 이 값인가 — 최근 수확</h2><div class="wrapx" id="why-harvest"></div></section>
+  <div class="wrap">
+    <div class="top">
+      <div class="left"><h1>Curve War</h1><span class="date" id="date"></span><div class="chips" id="chips"></div></div>
+      <div class="actions">
+        <button class="primary" id="btn-next">다음 달 ▶</button>
+        <button id="btn-auto" aria-pressed="false">연속 진행</button>
+        <button id="btn-reset-orders" title="모든 명령선을 현재 전선으로 되돌립니다">명령 취소</button>
+        <button id="btn-new">새 게임</button>
+      </div>
     </div>
-    <section><h2>왜 이 값인가 — 이번 달 인구 변화</h2><div class="wrapx" id="why-demog"></div></section>
-    <section><h2>기록</h2><ul class="log" id="log"></ul></section>
-  </main>
+    <div class="hint" id="hint" hidden>
+      <b>시작하는 법</b>
+      <ol>
+        <li>지도에서 <b>전선의 점</b>을 오른쪽으로 끌어 명령선을 내밉니다. 그 구간에 병력이 몰립니다.</li>
+        <li>오른쪽 <b>병력</b> 패널에서 농민을 징집합니다. 병력이 많을수록 밀고 나가지만 농사 일손이 줄어듭니다.</li>
+        <li><b>다음 달 ▶</b>을 눌러 한 달을 진행합니다. 목표는 <b>적 수도 함락</b>입니다.</li>
+      </ol>
+    </div>
+    <div class="layout">
+      <section class="mapbox">
+        <canvas id="map" tabindex="0" aria-label="전선 지도. 전선의 점을 끌어 명령선을 정합니다. 점을 고른 뒤 좌우 방향키로도 움직일 수 있습니다."></canvas>
+        <div class="maplegend">
+          <span><i style="border-color:var(--fg)"></i>전선</span>
+          <span><i style="border-color:var(--a);border-top-style:dashed"></i>우리 명령선</span>
+          <span><i style="border-color:var(--rv)"></i>적이 내미는 곳</span>
+          <span><i style="border-color:var(--fg);border-top-style:dashed;opacity:.6"></i>이번 달 예상 전선</span>
+          <span>점 옆 막대 = 병력 밀도</span>
+        </div>
+        <div class="preview" id="preview"></div>
+      </section>
+      <div class="side">
+        <section><h2>참모의 보고</h2><ul class="adv" id="advice"></ul></section>
+        <section><h2>선택한 구간</h2><div id="sector"></div></section>
+        <section><h2>병력</h2><div id="army"></div></section>
+      </div>
+    </div>
+    <section><h2>월간 보고</h2><ul class="reports" id="reports"></ul></section>
+    <details class="box" id="eco">
+      <summary>경제 상세 · 개간 사업</summary>
+      <section style="margin-top:10px"><h2 id="eco-date"></h2><div class="wrapx" id="summary"></div></section>
+      <section style="margin-top:10px"><h2>개간 사업</h2><div id="clear-panel"></div></section>
+      <div class="eco-grid">
+        <section id="sec-sow"><h2>왜 이 값인가 — 올해 파종</h2><div class="wrapx" id="why-sow"></div></section>
+        <section id="sec-harvest"><h2>왜 이 값인가 — 최근 수확</h2><div class="wrapx" id="why-harvest"></div></section>
+      </div>
+      <section style="margin-top:10px"><h2>왜 이 값인가 — 이번 달 인구 변화</h2><div class="wrapx" id="why-demog"></div></section>
+      <ul id="log" hidden></ul>
+    </details>
+  </div>
+  <div id="overlay" hidden role="dialog" aria-modal="true"><div class="card" id="overlay-card"></div></div>
   <div id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="card" id="modal-card"></div></div>
   <script type="module" src="/src/main.ts"></script>
 </body>

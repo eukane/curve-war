@@ -1,6 +1,6 @@
 import type { Explained } from "./explain";
 
-export type Stratum = "farmer" | "artisan" | "elite";
+export type Stratum = "farmer" | "artisan" | "elite" | "soldier";
 
 export interface Cohort {
   stratum: Stratum;
@@ -133,8 +133,52 @@ export interface PendingEvent {
   options: PendingOption[];
 }
 
+export type Realm = "player" | "rival";
+
+export interface MonthReport {
+  /** 이 달 말의 절대 일수 */
+  day: number;
+  /** 지난 한 달 동안 */
+  playerAreaHaDelta: number;
+  /** 우리 쪽 마을 수의 변화 (양수 = 점령) */
+  villagesDelta: number;
+  playerSoldiersStart: number;
+  playerSoldiersEnd: number;
+  rivalSoldiersStart: number;
+  rivalSoldiersEnd: number;
+  playerCasualties: number;
+  rivalCasualties: number;
+  /** 가장 크게 전진한 구간(점 번호)과 이동량(지도 단위). 전진이 없으면 -1, 0 */
+  bestAdvancePoint: number;
+  bestAdvanceUnits: number;
+  /** 가장 크게 후퇴한 구간(점 번호)과 이동량(지도 단위, 양수). 후퇴가 없으면 -1, 0 */
+  worstRetreatPoint: number;
+  worstRetreatUnits: number;
+  /** 이 달의 식량 부족률 */
+  playerDeficit: number;
+}
+
+export interface WarState {
+  /** 전선 제어점의 x 좌표. y는 균등 간격으로 고정 (x가 y의 함수이므로 곡선이 스스로 교차하지 못한다) */
+  front: number[];
+  /** 각 세력의 명령선(절대 x). 플레이어는 오른쪽으로 갈수록, 적은 왼쪽으로 갈수록 전진이다 */
+  orders: Record<Realm, number[]>;
+  playerRegionId: number;
+  rivalRegionId: number;
+  capitals: Record<Realm, { x: number; y: number }>;
+  result: "win" | "loss" | null;
+  /** 예측용: 전황 변수를 평균(1.0)으로 고정한다 */
+  expected?: boolean;
+  ai: { aggression: number; startDay: number; levyShare: number; harvestLevyShare: number };
+  reports: MonthReport[];
+  /** 이번 달 진행 중 누적 */
+  monthStart: { day: number; playerAreaHa: number; playerVillages: number; playerSoldiers: number; rivalSoldiers: number; front: number[]; playerCasualties: number; rivalCasualties: number };
+}
+
 export interface World {
   seed: number;
+  /** 전쟁 상태. 없으면 순수 경제 모델 */
+  war: WarState | null;
   /** 시작 후 경과 일수 */
   day: number;
   regions: Region[];

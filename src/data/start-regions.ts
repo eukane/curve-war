@@ -24,3 +24,26 @@ export const START_REGIONS: RegionSeed[] = [
     ],
   },
 ];
+
+/**
+ * 전쟁 시나리오: 같은 조건의 두 지역(플레이어 id 1, 적 id 2)이 전선을 맞대고 있다.
+ * 시작 병력은 양쪽 1,000명(전체 인구의 약 3.3%). 병력은 장인·상인 인구에서 떼어 총 인구를 30,000으로 맞췄다. (임시)
+ * 두 지역의 땅은 각각 지도의 절반(약 115,200ha)이고 경지 12,600ha가 그 안에 있다(경지율 약 10.9%, 임시).
+ */
+const sideRegion = (id: number, name: string): RegionSeed => ({
+  id,
+  name,
+  arableHa: 12_600,
+  clearableHa: 4_000,
+  soil: 1.0,
+  granaryKg: 4_200_000,
+  seedKg: 1_890_000,
+  cohorts: [
+    { stratum: "farmer", pop: 18_000 },
+    { stratum: "artisan", pop: 8_000 },
+    { stratum: "elite", pop: 3_000 },
+    { stratum: "soldier", pop: 1_000 },
+  ],
+});
+
+export const WAR_REGIONS: RegionSeed[] = [sideRegion(1, "소금평야 (우리)"), sideRegion(2, "동쪽 고원 (적)")];

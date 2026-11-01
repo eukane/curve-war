@@ -1,359 +1,319 @@
-import { START_REGIONS } from "./data/start-regions";
-import { DAYS_PER_YEAR, dateOf } from "./sim/calendar";
-import { CLEARING_LABOR_DAYS_PER_HA, HA_PER_FARMER } from "./sim/constants";
+import { WAR_REGIONS } from "./data/start-regions";
+import { HA_PER_FARMER, UNIT_KM } from "./sim/constants";
 import { EVENTS } from "./sim/events";
-import type { Explained } from "./sim/explain";
-import { dominatedOptions } from "./sim/quality";
-import {
-  carryingCapacity,
-  createWorld,
-  dailyNeedKg,
-  fieldFarmersAt,
-  forecastSeries,
-  popOf,
-  resolveEvent,
-  startClearing,
-  step,
-  stopClearing,
-  totalPop,
-} from "./sim/world";
-import { SCENARIOS } from "./sim/world";
-import type { Metrics, PendingEvent, ScenarioId, World } from "./sim/world";
+import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa } from "./sim/war";
+import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewMonth, setOrder, step, totalPop } from "./sim/world";
+import type { MonthPreview, World } from "./sim/world";
+import { advise } from "./ui/advisor";
+import { $, buildClearPanel, clearBuilt, dateText, esc, fmt, initEconomyPanel, renderClearActive, renderSummary } from "./ui/economy-panel";
+import { createMap } from "./ui/map";
+import type { MapView } from "./ui/map";
 
-const world: World = createWorld(20260101, START_REGIONS);
-const REGION_ID = START_REGIONS[0]!.id;
-const region = () => world.regions.find((r) => r.id === REGION_ID)!;
+let seed = 20260101;
+let world: World;
+let selected: number | null = null;
+let busy = false;
+let auto = false;
+let preview: MonthPreview | null = null;
+let map: MapView;
+let ecoOpen = false;
 
-/* 개발 중에만 열어 두는 점검용 손잡이 (화면 검증에 사용) */
+const PLAYER = 1;
+const RIVAL = 2;
+const player = () => world.regions.find((r) => r.id === PLAYER)!;
+const rival = () => world.regions.find((r) => r.id === RIVAL)!;
+
+/* 개발 중에만 열어 두는 점검용 손잡이 */
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__curveWar = { world, EVENTS };
+  Object.defineProperty(window, "__curveWar", { get: () => ({ world, EVENTS, step, setOrder, levy, disband, seed }) });
 }
 
-const $ = (id: string) => document.getElementById(id)!;
-const fmt = (v: number, d = 0) => v.toLocaleString("ko-KR", { maximumFractionDigits: d, minimumFractionDigits: d });
-const tons = (kg: number) => `${fmt(kg / 1000)}t`;
-const dateText = (day: number) => {
-  const d = dateOf(day);
-  return `${d.year + 1}년 ${d.month}월 ${d.dayOfMonth}일 (${d.season})`;
-};
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-
-/* ------------------------------------------------------------------ */
-/* 시간 조작                                                           */
-/* ------------------------------------------------------------------ */
-let speed = 0; // 초당 진행 일수. 0이면 일시정지
-const SPEEDS: [string, number][] = [
-  ["일시정지", 0],
-  ["×1 (1일/초)", 1],
-  ["×10", 10],
-  ["×30 (1달/초)", 30],
-  ["×180", 180],
-];
-
-function buildControls() {
-  const c = $("controls");
-  SPEEDS.forEach(([label, v]) => {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.setAttribute("aria-pressed", String(v === speed));
-    b.addEventListener("click", () => {
-      speed = v;
-      refreshSpeedButtons();
-    });
-    c.appendChild(b);
-  });
+function newGame() {
+  world = createWorld(seed, WAR_REGIONS, { war: { playerRegionId: PLAYER, rivalRegionId: RIVAL } });
+  selected = null;
+  busy = false;
+  auto = false;
+  initEconomyPanel(world, PLAYER, () => renderAll());
+  $("overlay").hidden = true;
+  $("hint").hidden = false;
+  refreshPreview();
 }
-function refreshSpeedButtons() {
-  $("controls")
-    .querySelectorAll("button")
-    .forEach((b, i) => b.setAttribute("aria-pressed", String(SPEEDS[i]![1] === speed)));
+
+function refreshPreview() {
+  preview = world.war?.result ? null : previewMonth(world);
 }
 
 /* ------------------------------------------------------------------ */
-/* "왜 이 값인가" 표                                                    */
+/* 렌더링                                                              */
 /* ------------------------------------------------------------------ */
-function explainedTable(e: Explained | null | undefined): string {
-  if (!e) return `<span class="mu">아직 기록이 없습니다.</span>`;
-  const rows = e.terms
-    .map((t) => {
-      const val = t.unit === "" ? "" : `${fmt(t.value, Math.abs(t.value) < 10 ? 2 : 0)} ${t.unit}`;
-      return `<tr><td>${esc(t.label)}</td><td class="n mono">${val}</td><td class="mu">${esc(t.note ?? "")}</td></tr>`;
-    })
+function renderTop() {
+  const P = player();
+  const R = rival();
+  const war = world.war!;
+  $("date").textContent = dateText(world.day);
+  const stockDays = P.granaryKg / dailyNeedKg(P);
+  const area = (playerAreaHa(war.front) / totalAreaHa()) * 100;
+  const chips: string[] = [];
+  chips.push(`<span class="chip">병력 <b>${fmt(soldiersOf(P))}</b> <span class="mu">vs ${fmt(soldiersOf(R))}</span></span>`);
+  chips.push(`<span class="chip ${stockDays < 60 ? "warn" : ""}">식량 <b>${fmt(stockDays)}</b>일치</span>`);
+  chips.push(`<span class="chip">인구 <b>${fmt(totalPop(P))}</b> <span class="mu">vs ${fmt(totalPop(R))}</span></span>`);
+  chips.push(`<span class="chip">영토 <b>${fmt(area, 1)}%</b></span>`);
+  if (P.lastDeficit > 0.01) chips.push(`<span class="chip bad">굶는 중 <b>${fmt(P.lastDeficit * 100, 0)}%</b></span>`);
+  $("chips").innerHTML = chips.join("");
+}
+
+function renderAdvice() {
+  $("advice").innerHTML = advise(world, preview)
+    .map((a) => `<li class="${a.level}"><b>${esc(a.title)}</b><span>${esc(a.text)}</span></li>`)
     .join("");
-  const head = e.unit === "kg" ? `${fmt(e.value / 1000)} t` : `${fmt(e.value, e.unit === "ha" ? 0 : 1)} ${e.unit}`;
-  return `<p style="margin:0 0 6px"><b>${esc(e.label)}: ${head}</b><br><code>${esc(e.formula)}</code></p><table><tbody>${rows}</tbody></table>`;
 }
 
-/* ------------------------------------------------------------------ */
-/* 요약                                                                */
-/* ------------------------------------------------------------------ */
-function renderSummary() {
-  const r = region();
-  const need = dailyNeedKg(r);
-  const k = carryingCapacity(r);
-  const pop = totalPop(r);
-  const fillPct = Math.min(100, (pop / k) * 100);
-  const stockDays = r.granaryKg / need;
-  const fieldFarmers = fieldFarmersAt(r, world.day);
-  const needField = r.arableHa / HA_PER_FARMER;
-  $("date").textContent = `${dateText(world.day)} — ${r.name}`;
-  $("summary").innerHTML = `<table><tbody>
-    <tr><td>인구</td><td class="n mono">${fmt(pop)} 명</td>
-      <td class="mu">농민 ${fmt(popOf(r, "farmer"))} · 장인·상인 ${fmt(popOf(r, "artisan"))} · 지배층 ${fmt(popOf(r, "elite"))}</td></tr>
-    <tr><td>수용력</td><td class="n mono">${fmt(k)} 명</td>
-      <td><div class="meter" role="img" aria-label="인구는 수용력의 ${fmt(fillPct)}%"><i style="width:${fillPct}%"></i></div>
-        <span class="mu">인구는 수용력의 ${fmt(fillPct)}% (경작지 ${fmt(r.arableHa)}ha 기준, 평년, 일손은 충분하다고 가정)</span></td></tr>
-    <tr><td>곡창 재고</td><td class="n mono">${tons(r.granaryKg)}</td>
-      <td class="mu">하루 소비 약 ${fmt(need / 1000, 1)}t → ${fmt(stockDays)}일치 · 종자 ${tons(r.seedKg)} 별도</td></tr>
-    <tr><td>일손</td><td class="n mono">${fmt(fieldFarmers)} 명</td>
-      <td class="mu">들에 나갈 농민. 필요한 일손은 경작지 ${fmt(r.arableHa)}ha ÷ ${HA_PER_FARMER} = ${fmt(needField)}명${
-        fieldFarmers < needField ? ` <span class="warn">— ${fmt(needField - fieldFarmers)}명 부족</span>` : ` <span class="good">— ${fmt(fieldFarmers - needField)}명 여유</span>`
-      }</td></tr>
-    <tr><td>지난달 식량 부족률</td><td class="n mono ${r.lastDeficit > 0.01 ? "bad" : ""}">${fmt(r.lastDeficit * 100, 1)} %</td>
-      <td class="mu">필요량 대비 못 먹은 비율 · 누적 기아·질병 사망 ${fmt(r.starvationDeathsTotal)}명</td></tr>
-  </tbody></table>`;
-  $("why-sow").innerHTML = explainedTable(r.lastSowing);
-  $("why-harvest").innerHTML = explainedTable(r.lastHarvest);
-  const dm = r.lastDemography;
-  $("why-demog").innerHTML = dm ? explainedTable(dm.births) + `<div style="height:10px"></div>` + explainedTable(dm.deaths) : `<span class="mu">첫 달이 끝나면 표시됩니다.</span>`;
-  $("log").innerHTML =
-    world.log.length === 0
-      ? `<li class="empty"><span class="mu">아직 기록이 없습니다.</span></li>`
-      : [...world.log]
-          .reverse()
-          .map((l) => `<li><time>${dateText(l.day)}</time><span>${esc(l.text)}</span></li>`)
-          .join("");
-}
-
-/* ------------------------------------------------------------------ */
-/* 개간 패널                                                           */
-/* ------------------------------------------------------------------ */
-let clearBuilt = false;
-let lastPreviewKey = "";
-let previewScenario: ScenarioId = "normal";
-
-function buildClearPanel() {
-  const p = $("clear-panel");
-  p.innerHTML = `
-    <div id="clear-idle">
-      <p class="mu" style="margin:0 0 6px">숲과 황무지를 경작지로 바꿉니다. 인부는 들에서 빠지고, 매일 인부 수 ÷ ${CLEARING_LABOR_DAYS_PER_HA}ha씩 땅이 늘어납니다. 새 땅은 다음 봄 파종부터 쓰입니다.</p>
-      <div class="field"><label for="in-workers">인부</label><input id="in-workers" type="range" min="100" max="6000" step="100" value="1500" /><output id="out-workers"></output></div>
-      <div class="field"><label for="in-target">목표 면적</label><input id="in-target" type="range" min="100" max="4000" step="100" value="2000" /><output id="out-target"></output></div>
-      <div class="row"><button id="btn-start" class="primary">개간 시작</button><span id="clear-msg" class="note" role="status"></span></div>
-      <div id="clear-preview" class="wrapx"></div>
+function renderSector() {
+  const el = $("sector");
+  if (selected === null) {
+    el.innerHTML = `<p class="mu" style="margin:0">지도에서 <b>전선의 점</b>을 누르거나 끌어 보세요. 끌면 그 구간과 이웃 구간의 명령선이 함께 움직이고, 병력이 거기에 몰립니다. 점을 두 번 누르면 그 점의 명령이 취소됩니다.</p>`;
+    return;
+  }
+  const war = world.war!;
+  const pr = computePressure(world);
+  const i = selected;
+  const supP = supplyMultipliers(war.front, war.capitals.player.x)[i]!;
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x)[i]!;
+  const net = pr.net[i]!;
+  const shiftKm = preview ? preview.shifts[i]! * UNIT_KM : 0;
+  const order = war.orders.player[i]!;
+  const ahead = (order - war.front[i]!) * UNIT_KM;
+  el.innerHTML = `<dl class="kv">
+      <dt>구간</dt><dd>${sectorName(i)}</dd>
+      <dt>우리 밀도</dt><dd>${fmt(pr.playerDensity[i]!, 1)} 명/km</dd>
+      <dt>적 밀도</dt><dd>${fmt(pr.rivalDensity[i]!, 1)} 명/km</dd>
+      <dt>차이</dt><dd class="${net > 1 ? "good" : net < -1 ? "bad" : ""}">${net > 0 ? "+" : ""}${fmt(net, 1)} 명/km</dd>
+      <dt>보급 배율</dt><dd>우리 ${fmt(supP, 2)} · 적 ${fmt(supR, 2)}</dd>
+      <dt>명령선</dt><dd>${Math.abs(ahead) < 0.05 ? "현재 전선 유지" : `${ahead > 0 ? "앞으로" : "뒤로"} ${fmt(Math.abs(ahead), 1)}km`}</dd>
+      <dt>이번 달 예상</dt><dd class="${shiftKm > 0.05 ? "good" : shiftKm < -0.05 ? "bad" : ""}">${Math.abs(shiftKm) < 0.05 ? "움직임 없음" : `${shiftKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(shiftKm), 1)}km`}</dd>
+    </dl>
+    <div class="row" style="margin-top:8px">
+      <button id="sec-back">← 뒤로 12</button><button id="sec-fwd">앞으로 12 →</button><button id="sec-clear">명령 취소</button>
     </div>
-    <div id="clear-active" hidden></div>`;
-  const wi = $("in-workers") as HTMLInputElement;
-  const ti = $("in-target") as HTMLInputElement;
-  const onInput = () => {
-    updateClearInputs();
-    lastPreviewKey = "";
-    renderClearPreview();
+    <p class="note" style="margin:6px 0 0">밀도 차이가 +이면 우리가 밀고, −이면 밀립니다. 명령선보다 앞으로는 나아가지 못합니다. 수도에서 멀수록 보급 배율이 떨어집니다.</p>`;
+  $("sec-back").onclick = () => map.nudge(i, -12);
+  $("sec-fwd").onclick = () => map.nudge(i, 12);
+  $("sec-clear").onclick = () => {
+    setOrder(world, i, war.front[i]!);
+    onOrdersChanged();
   };
-  wi.addEventListener("input", onInput);
-  ti.addEventListener("input", onInput);
-  $("btn-start").addEventListener("click", () => {
-    const res = startClearing(world, REGION_ID, +wi.value, +ti.value);
-    $("clear-msg").textContent = res.ok ? "" : res.reason;
-    lastPreviewKey = "";
-    renderAll();
-  });
-  clearBuilt = true;
 }
 
-function updateClearInputs() {
-  const r = region();
-  const wi = $("in-workers") as HTMLInputElement;
-  const ti = $("in-target") as HTMLInputElement;
-  wi.max = String(Math.max(100, Math.floor(popOf(r, "farmer") / 100) * 100));
-  ti.max = String(Math.max(100, Math.floor(r.clearableHa / 100) * 100));
-  if (+ti.value > +ti.max) ti.value = ti.max;
-  if (+wi.value > +wi.max) wi.value = wi.max;
-  $("out-workers").textContent = `${fmt(+wi.value)} 명`;
-  $("out-target").textContent = `${fmt(+ti.value)} ha`;
-}
-
-function deltaClass(good: boolean, diff: number): string {
-  return Math.abs(diff) < 1e-9 ? "" : good ? "good" : "bad";
-}
-
-function renderClearPreview() {
-  const r = region();
-  const wi = +(($("in-workers") as HTMLInputElement).value);
-  const ti = +(($("in-target") as HTMLInputElement).value);
-  const key = `${Math.floor(world.day / 30)}:${wi}:${ti}:${previewScenario}`;
-  if (key === lastPreviewKey) return;
-  lastPreviewKey = key;
-
-  const days = (ti * CLEARING_LABOR_DAYS_PER_HA) / wi;
-  const done = dateText(world.day + Math.ceil(days));
-  const cps = [
-    { days: DAYS_PER_YEAR, label: "1년 뒤" },
-    { days: DAYS_PER_YEAR * 10, label: "10년 뒤" },
-    { days: DAYS_PER_YEAR * 40, label: "40년 뒤" },
-  ];
-  const base = forecastSeries(world, REGION_ID, cps, undefined, previewScenario);
-  const withIt = forecastSeries(
-    world,
-    REGION_ID,
-    cps,
-    (c) => {
-      startClearing(c, REGION_ID, wi, ti);
-    },
-    previewScenario,
-  );
-  const scNote = SCENARIOS.find((x) => x.id === previewScenario)!.note;
-  const toggle = SCENARIOS.map(
-    (sc) => `<button data-sc="${sc.id}" aria-pressed="${sc.id === previewScenario}">${sc.label}</button>`,
-  ).join("");
-  const kWith = carryingCapacity(r, ti);
-
-  const row = (label: string, f: (m: Metrics) => number, fmtv: (v: number) => string, goodWhenHigher: boolean) =>
-    `<tr><td>${label}</td>${cps
-      .map((_, i) => {
-        const a = f(base[i]!.metrics);
-        const b = f(withIt[i]!.metrics);
-        const d = b - a;
-        const cls = deltaClass(goodWhenHigher ? d > 0 : d < 0, d);
-        return `<td class="n mono">${fmtv(a)} → <span class="${cls}">${fmtv(b)}</span></td>`;
-      })
-      .join("")}</tr>`;
-
-  const farmersNow = popOf(r, "farmer");
-  const needField = r.arableHa / HA_PER_FARMER;
-  const surplus = farmersNow - needField;
-  const labor =
-    wi <= surplus
-      ? `<span class="good">남는 일손 ${fmt(surplus)}명 안에서 보내므로 수확은 줄지 않습니다.</span>`
-      : `<span class="warn">남는 일손은 ${fmt(Math.max(0, surplus))}명인데 ${fmt(wi)}명을 보내므로, 사업이 이어지는 동안 파종·수확 면적이 줄어듭니다.</span>`;
-
-  $("clear-preview").innerHTML = `
-    <p style="margin:8px 0 4px"><b>예상 완공:</b> ${fmt(days)}일 뒤 (${done}) · <b>수용력:</b> ${fmt(carryingCapacity(r))} → <span class="good">${fmt(kWith)}</span> 명 · ${labor}</p>
-    <div class="row" role="group" aria-label="예측 시나리오" style="margin:8px 0 4px">${toggle}<span class="note">${esc(scNote)}</span></div>
-    <table class="wide"><thead><tr><th>예측 (안 함 → 시작)</th>${cps.map((c) => `<th class="n">${c.label}</th>`).join("")}</tr></thead><tbody>
-      ${row("인구 (명)", (m) => m.pop, (v) => fmt(v), true)}
-      ${row("누적 기아 사망 (명)", (m) => m.starvationDeaths, (v) => fmt(v), false)}
-      ${row("최근 수확 입고 (t)", (m) => (m.lastHarvestKg ?? 0) / 1000, (v) => fmt(v), true)}
-      ${row("경작지 (ha)", (m) => m.arableHa, (v) => fmt(v), true)}
-    </tbody></table>
-    <p class="note" style="margin:6px 0 0">예측은 모델을 복제해 실제로 돌린 값입니다. 실제 기상은 이 두 시나리오 사이 어디든 될 수 있습니다.</p>`;
-  $("clear-preview")
-    .querySelectorAll<HTMLButtonElement>("button[data-sc]")
+function renderArmy() {
+  const P = player();
+  const farmers = popOf(P, "farmer");
+  const sold = soldiersOf(P);
+  const need = P.arableHa / HA_PER_FARMER;
+  const gap = need - fieldFarmersAt(P, world.day);
+  const cap = (farmers + sold) * 0.4;
+  $("army").innerHTML = `<dl class="kv">
+      <dt>병력</dt><dd>${fmt(sold)}명</dd>
+      <dt>농민</dt><dd>${fmt(farmers)}명</dd>
+      <dt>농사에 필요한 일손</dt><dd>${fmt(need)}명</dd>
+      <dt>일손</dt><dd class="${gap > 0.5 ? "warn" : "good"}">${gap > 0.5 ? `${fmt(gap)}명 부족` : `${fmt(Math.max(0, -gap))}명 여유`}</dd>
+      <dt>징집 한도</dt><dd>${fmt(cap)}명</dd>
+    </dl>
+    <div class="row" style="margin-top:8px">
+      <button data-lv="500">+500 징집</button><button data-lv="1000">+1,000 징집</button>
+      <button data-lv="-500">−500 해산</button><button data-lv="-1000">−1,000 해산</button>
+    </div>
+    <p class="note" id="army-note" style="margin:6px 0 0">병력은 농사를 짓지 못하지만 곡식은 똑같이 먹습니다. 일손이 모자라면 수확이 그만큼 줄고, 굶으면 병사도 약해집니다. 적은 우리 병력을 보고 따라 징집합니다.</p>`;
+  $("army")
+    .querySelectorAll<HTMLButtonElement>("button[data-lv]")
     .forEach((b) =>
       b.addEventListener("click", () => {
-        previewScenario = b.dataset.sc as ScenarioId;
-        renderClearPreview();
+        const n = +b.dataset.lv!;
+        const res = n > 0 ? levy(world, PLAYER, n) : disband(world, PLAYER, -n);
+        if (!res.ok) $("army-note").textContent = res.reason;
+        else onOrdersChanged();
       }),
     );
 }
 
-function renderClearActive() {
-  const r = region();
-  const c = r.clearing;
-  const idle = $("clear-idle");
-  const active = $("clear-active");
-  idle.hidden = !!c;
-  active.hidden = !c;
-  if (!c) {
-    updateClearInputs();
-    renderClearPreview();
+function renderPreview() {
+  const el = $("preview");
+  if (world.war!.result) {
+    el.textContent = "";
     return;
   }
-  const pct = Math.min(100, (c.progressHa / c.targetHa) * 100);
-  const rate = (c.workers - (world.day < c.reservedUntilDay ? c.reservedForHarvest : 0)) / CLEARING_LABOR_DAYS_PER_HA;
-  const left = rate > 0 ? Math.ceil((c.targetHa - c.progressHa) / rate) : Infinity;
-  active.innerHTML = `
-    <p style="margin:0 0 4px"><b>진행 중</b> — 인부 ${fmt(c.workers)}명 · 목표 ${fmt(c.targetHa)}ha · 하루 ${fmt(rate, 1)}ha</p>
-    <div class="meter" role="img" aria-label="진행률 ${fmt(pct)}%"><i style="width:${pct}%"></i></div>
-    <p class="mu" style="margin:2px 0 8px">${fmt(c.progressHa, 1)}ha 완료 (${fmt(pct)}%) · 완공까지 약 ${Number.isFinite(left) ? `${fmt(left)}일 (${dateText(world.day + left)})` : "알 수 없음"}</p>
-    <button id="btn-stop">중단 (이미 개간한 땅은 남습니다)</button>`;
-  $("btn-stop").addEventListener("click", () => {
-    stopClearing(world, REGION_ID);
-    lastPreviewKey = "";
+  if (!preview) {
+    el.innerHTML = `<span class="mu">예상을 계산하는 중…</span>`;
+    return;
+  }
+  const dHa = preview.playerAreaHaDelta;
+  const dPct = (dHa / totalAreaHa()) * 100;
+  const big = preview.shifts.reduce((m, v, i) => (Math.abs(v) > Math.abs(preview!.shifts[m]!) ? i : m), 0);
+  const bigKm = preview.shifts[big]! * UNIT_KM;
+  const res = preview.result === "win" ? `<b class="good"> 이대로면 이번 달에 적 수도가 함락됩니다.</b>` : preview.result === "loss" ? `<b class="bad"> 이대로면 이번 달에 우리 수도가 함락됩니다.</b>` : "";
+  el.innerHTML = `<b>이번 달 예상</b> (적의 반응 포함, 전황 변수 ±12% 불확실)　
+    영토 <span class="${dHa > 1 ? "good" : dHa < -1 ? "bad" : ""}">${dHa >= 0 ? "+" : ""}${fmt(dHa)}ha (${dPct >= 0 ? "+" : ""}${fmt(dPct, 2)}%p)</span> ·
+    우리 병력 ${fmt(soldiersOf(player()))}→${fmt(preview.playerSoldiers)} (전사 약 ${fmt(preview.playerCasualties)}) ·
+    적 ${fmt(soldiersOf(rival()))}→${fmt(preview.rivalSoldiers)} (전사 약 ${fmt(preview.rivalCasualties)}) ·
+    ${Math.abs(bigKm) < 0.05 ? "전선은 움직이지 않을 전망" : `가장 크게 움직이는 곳 ${sectorName(big)}: ${bigKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(bigKm), 1)}km`}${res}`;
+}
+
+function renderReports() {
+  const rs = [...world.war!.reports].reverse().slice(0, 8);
+  $("reports").innerHTML = rs.length
+    ? rs
+        .map((r) => {
+          const dPct = (r.playerAreaHaDelta / totalAreaHa()) * 100;
+          const adv = r.bestAdvanceUnits * UNIT_KM;
+          const ret = r.worstRetreatUnits * UNIT_KM;
+          const moves = [adv >= 0.1 ? `${sectorName(r.bestAdvancePoint)} 전진 ${fmt(adv, 1)}km` : "", ret >= 0.1 ? `${sectorName(r.worstRetreatPoint)} 후퇴 ${fmt(ret, 1)}km` : ""].filter(Boolean).join(", ");
+          const parts = [
+            Math.abs(r.playerAreaHaDelta) < 1 && !moves ? "전선은 거의 움직이지 않았다." : `영토 ${r.playerAreaHaDelta > 0 ? "+" : ""}${fmt(r.playerAreaHaDelta)}ha(${dPct > 0 ? "+" : ""}${fmt(dPct, 2)}%p).${moves ? ` ${moves}.` : ""}`,
+            r.villagesDelta !== 0 ? `<b class="${r.villagesDelta > 0 ? "good" : "bad"}">마을 ${Math.abs(r.villagesDelta)}곳 ${r.villagesDelta > 0 ? "점령" : "상실"}.</b>` : "",
+            `전사: 우리 ${fmt(r.playerCasualties)}명, 적 ${fmt(r.rivalCasualties)}명.`,
+            r.playerDeficit > 0.02 ? `<span class="bad">식량 부족 ${fmt(r.playerDeficit * 100, 0)}%.</span>` : "",
+          ];
+          return `<li><time>${dateText(r.day - 1).replace(/ \(.*\)/, "")}</time><span>${parts.filter(Boolean).join(" ")}</span></li>`;
+        })
+        .join("")
+    : `<li class="empty"><span class="mu">아직 한 달도 지나지 않았습니다. 명령을 내리고 <b>다음 달 ▶</b>을 눌러 보세요.</span></li>`;
+}
+
+function renderResult() {
+  const war = world.war!;
+  const ov = $("overlay");
+  if (!war.result) {
+    ov.hidden = true;
+    return;
+  }
+  const win = war.result === "win";
+  const months = Math.round(world.day / 30);
+  ov.hidden = false;
+  $("overlay-card").innerHTML = `<h2 class="${win ? "good" : "bad"}">${win ? "승리 — 적 수도 함락" : "패배 — 수도 함락"}</h2>
+    <p>${months}개월(${(months / 12).toFixed(1)}년) 만에 ${win ? "적의 수도를 함락했습니다" : "수도를 잃었습니다"}.</p>
+    <dl class="kv"><dt>영토</dt><dd>${fmt((playerAreaHa(war.front) / totalAreaHa()) * 100, 1)}%</dd>
+      <dt>우리 병력</dt><dd>${fmt(soldiersOf(player()))}명</dd><dt>적 병력</dt><dd>${fmt(soldiersOf(rival()))}명</dd>
+      <dt>우리 인구</dt><dd>${fmt(totalPop(player()))}명</dd><dt>누적 기아 사망</dt><dd>${fmt(player().starvationDeathsTotal)}명</dd></dl>
+    <div class="row" style="margin-top:14px"><button class="primary" id="btn-again">새 게임</button></div>`;
+  $("btn-again").onclick = () => {
+    seed += 1;
+    newGame();
     renderAll();
-  });
+  };
 }
 
-/* ------------------------------------------------------------------ */
-/* 사건 창                                                             */
-/* ------------------------------------------------------------------ */
-function renderModal() {
-  const modal = $("modal");
-  const p = world.pending;
-  if (!p) {
-    modal.hidden = true;
-    return;
-  }
-  if (!modal.hidden && modal.dataset.key === `${p.eventId}:${p.day}`) return; // 이미 그림
-  modal.hidden = false;
-  modal.dataset.key = `${p.eventId}:${p.day}`;
-  speed = 0;
-  refreshSpeedButtons();
-  $("modal-card").innerHTML = modalHtml(p);
-  $("modal-card")
-    .querySelectorAll<HTMLButtonElement>("button[data-opt]")
-    .forEach((b) =>
-      b.addEventListener("click", () => {
-        resolveEvent(world, b.dataset.opt!);
-        modal.hidden = true;
-        modal.dataset.key = "";
-        renderAll();
-      }),
-    );
-}
-
-function modalHtml(p: PendingEvent): string {
-  const fake = new Set(dominatedOptions(p.options).map((d) => d.id));
-  const opts = p.options
-    .map((o) => {
-      const tables = SCENARIOS.map((sc) => {
-        const rows = o.outcomes[sc.id].series
-          .map(
-            (s) =>
-              `<tr><td>${esc(s.label)}</td><td class="n mono">${fmt(s.metrics.pop)}</td><td class="n mono">${fmt(s.metrics.starvationDeaths - p.before.starvationDeaths)}</td><td class="n mono">${tons(s.metrics.granaryKg)}</td><td class="n mono">${s.metrics.lastHarvestKg === null ? "—" : tons(s.metrics.lastHarvestKg)}</td></tr>`,
-          )
-          .join("");
-        return `<h3>${esc(sc.label)} <span class="note" style="font-weight:400">— ${esc(sc.note)}</span></h3>
-          <div class="wrapx"><table class="wide"><thead><tr><th>시점</th><th class="n">인구</th><th class="n">이후 기아 사망</th><th class="n">곡창</th><th class="n">최근 수확</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      }).join("");
-      return `<div class="opt"><div class="head"><span>${esc(o.label)}</span><button class="primary" data-opt="${esc(o.id)}">이걸로 결정</button></div>${tables}
-        ${fake.has(o.id) ? `<p class="note bad" style="margin:4px 0 0">주의: 이 선택지는 평년·흉년 어느 쪽에서도 다른 선택지보다 모든 면에서 나쁩니다.</p>` : ""}</div>`;
-    })
-    .join("");
-  return `<h2 id="modal-title" style="font-size:18px">${esc(p.title)}</h2>
-    <p class="mu" style="margin:0 0 4px">${dateText(p.day)}</p>
-    <p>${esc(p.text)}</p>${opts}`;
-}
-
-/* ------------------------------------------------------------------ */
-/* 루프                                                                */
-/* ------------------------------------------------------------------ */
 function renderAll() {
-  if (!clearBuilt) buildClearPanel();
-  renderSummary();
-  renderClearActive();
-  renderModal();
-  lastRenderedDay = world.day;
-}
-
-let lastRenderedDay = -1;
-let last = performance.now();
-let acc = 0;
-function frame(now: number) {
-  const dt = Math.min(0.25, (now - last) / 1000);
-  last = now;
-  if (speed > 0 && !world.pending) {
-    acc += dt * speed;
-    const days = Math.floor(acc);
-    if (days > 0) {
-      acc -= days;
-      step(world, days);
-    }
+  renderTop();
+  renderAdvice();
+  renderSector();
+  renderArmy();
+  renderPreview();
+  renderReports();
+  renderResult();
+  map.draw(selected, preview);
+  if (ecoOpen) {
+    if (!clearBuilt) buildClearPanel();
+    renderSummary();
+    renderClearActive();
   }
-  if (world.day !== lastRenderedDay || (world.pending && $("modal").hidden)) renderAll();
-  requestAnimationFrame(frame);
+  renderButtons();
 }
 
-buildControls();
-renderAll();
-requestAnimationFrame(frame);
+function renderButtons() {
+  const btn = $("btn-next") as HTMLButtonElement;
+  btn.disabled = busy || !!world.war!.result;
+  btn.textContent = busy ? "진행 중…" : "다음 달 ▶";
+  $("btn-auto").setAttribute("aria-pressed", String(auto));
+}
+
+/* ------------------------------------------------------------------ */
+/* 입력과 턴 진행                                                      */
+/* ------------------------------------------------------------------ */
+let previewQueued = false;
+function onOrdersChanged() {
+  // 끌고 있는 동안에는 예측을 프레임당 한 번만 계산한다
+  if (previewQueued) return;
+  previewQueued = true;
+  requestAnimationFrame(() => {
+    previewQueued = false;
+    if (busy) return;
+    refreshPreview();
+    renderAll();
+  });
+}
+
+function nextMonth() {
+  if (busy || world.war!.result) return;
+  busy = true;
+  $("hint").hidden = true;
+  preview = null;
+  renderButtons();
+  const startMonth = Math.floor(world.day / 30);
+  const tick = () => {
+    const stepped = step(world, 1);
+    map.draw(selected, null);
+    renderTop();
+    const done = Math.floor(world.day / 30) > startMonth || world.war!.result || stepped === 0;
+    if (!done) {
+      setTimeout(tick, 28);
+      return;
+    }
+    busy = false;
+    refreshPreview();
+    renderAll();
+    if (auto && !world.war!.result) {
+      const danger = advise(world, preview).some((a) => a.level === "danger");
+      if (danger) {
+        auto = false;
+        renderAll();
+      } else setTimeout(nextMonth, 350);
+    }
+  };
+  tick();
+}
+
+function init() {
+  newGame();
+  const canvas = document.getElementById("map") as HTMLCanvasElement;
+  map = createMap(canvas, () => world, {
+    onSelect: (i) => {
+      selected = i;
+      renderSector();
+      map.draw(selected, preview);
+    },
+    onOrdersChanged,
+  });
+  canvas.addEventListener("keydown", (ev) => {
+    if (selected === null) return;
+    const dx = ev.key === "ArrowRight" ? 12 : ev.key === "ArrowLeft" ? -12 : 0;
+    if (dx) {
+      ev.preventDefault();
+      map.nudge(selected, dx);
+    } else if (ev.key === "ArrowUp" || ev.key === "ArrowDown") {
+      ev.preventDefault();
+      selected = Math.max(0, Math.min(world.war!.front.length - 1, selected + (ev.key === "ArrowUp" ? -1 : 1)));
+      renderAll();
+    }
+  });
+  $("btn-next").addEventListener("click", nextMonth);
+  $("btn-auto").addEventListener("click", () => {
+    auto = !auto;
+    renderAll();
+    if (auto) nextMonth();
+  });
+  $("btn-reset-orders").addEventListener("click", () => {
+    world.war!.orders.player = [...world.war!.front];
+    onOrdersChanged();
+  });
+  $("btn-new").addEventListener("click", () => {
+    seed += 1;
+    newGame();
+    renderAll();
+  });
+  $("eco").addEventListener("toggle", () => {
+    ecoOpen = ($("eco") as HTMLDetailsElement).open;
+    renderAll();
+  });
+  renderAll();
+}
+
+init();
