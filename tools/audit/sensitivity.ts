@@ -115,7 +115,8 @@ for (const [a, b] of PAIRS) for (const fa of [0.5, 2]) for (const fb of [0.5, 2]
 /* 실행 */
 function run(dir: string, seed0 = 1): Promise<Record<string, Record<string, number[]>>> {
   return new Promise((res, rej) => {
-    const p = spawn("npx", ["tsx", "tools/audit/run-variant.ts", dir, String(seed0), "6", "24"], { cwd: process.cwd() });
+    // 변수 감사는 고정 규칙 AI로 돌린다. 탐색형 AI는 계획마다 후보를 시뮬레이션해서 감사 전체에는 너무 느리다 (audit:ai가 따로 비교한다).
+    const p = spawn("npx", ["tsx", "tools/audit/run-variant.ts", dir, String(seed0), "6", "24"], { cwd: process.cwd(), env: { ...process.env, AI_MODE: "scripted" } });
     let out = "", err = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (err += d));

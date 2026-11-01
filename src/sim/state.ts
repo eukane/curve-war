@@ -181,7 +181,18 @@ export interface WarState {
   result: "win" | "loss" | null;
   /** 예측용: 전황 변수를 평균(1.0)으로 고정한다 */
   expected?: boolean;
-  ai: { aggression: number; startDay: number; levyShare: number; harvestLevyShare: number };
+  ai: {
+    aggression: number;
+    startDay: number;
+    levyShare: number;
+    harvestLevyShare: number;
+    /** scripted: 고정 규칙(비교용), search: 복제 시뮬레이터로 후보를 돌려 고르는 탐색형 */
+    mode: "scripted" | "search";
+    /** 적 지도자의 성향 id (ai.ts의 AI_PROFILES) */
+    profile: string;
+    /** 예측용 복제에서 이번 한 번은 계획을 건너뛴다 (후보를 이미 적용한 상태에서 시작하므로) */
+    skipPlanOnce?: boolean;
+  };
   reports: TurnReport[];
   /** 이번 턴 진행 중 누적 */
   turnStart: { day: number; playerAreaHa: number; playerVillages: number; playerSoldiers: number; rivalSoldiers: number; front: number[]; playerCasualties: number; rivalCasualties: number; pop: number };

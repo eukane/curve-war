@@ -1,6 +1,7 @@
 import { WAR_REGIONS } from "./data/start-regions";
 import { TURN_DAYS, turnOf } from "./sim/calendar";
 import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
+import { profileOf } from "./sim/ai";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
 import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
@@ -18,6 +19,8 @@ let busy = false;
 let skip = false;
 let auto = false;
 let preview: TurnPreview | null = null;
+/** 명령을 바꾼 직후에는 예상이 낡았다. 잠시 멈추면 다시 계산한다 (탐색형 적 AI 때문에 계산이 수백 ms 걸린다) */
+let previewStale = false;
 let map: MapView;
 let ecoOpen = false;
 
@@ -44,6 +47,7 @@ function newGame() {
 
 function refreshPreview() {
   preview = world.war?.result ? null : previewTurn(world);
+  previewStale = false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,6 +70,8 @@ function renderTop() {
   chips.push(`<span class="chip ${stockDays < 60 ? "warn" : ""}" title="곡창 재고가 하루 소비량으로 며칠을 버티는가">식량 <b>${fmt(stockDays)}</b>일치</span>`);
   chips.push(`<span class="chip">인구 <b>${fmt(totalPop(P))}</b> <span class="mu">vs ${fmt(totalPop(R))}</span></span>`);
   chips.push(`<span class="chip">영토 <b>${fmt(area, 1)}%</b></span>`);
+  const prof = profileOf(war.ai.profile);
+  chips.push(`<span class="chip" title="${esc(prof.blurb)}">적 지도자 <b>${esc(prof.name)}</b></span>`);
   if (P.lastDeficit > 0.01) chips.push(`<span class="chip bad" title="지난 한 달 필요한 곡식 중 못 먹은 비율">굶는 중 <b>${fmt(P.lastDeficit * 100, 0)}%</b></span>`);
   $("chips").innerHTML = chips.join("");
 }
@@ -197,7 +203,8 @@ function renderPreview() {
   const big = preview.shifts.reduce((m, v, i) => (Math.abs(v) > Math.abs(preview!.shifts[m]!) ? i : m), 0);
   const bigKm = preview.shifts[big]! * UNIT_KM;
   const res = preview.result === "win" ? `<b class="good"> 이대로면 이번 계절에 적 수도가 함락됩니다.</b>` : preview.result === "loss" ? `<b class="bad"> 이대로면 이번 계절에 우리 수도가 함락됩니다.</b>` : "";
-  el.innerHTML = `<b>${t.season} 예상</b> <span class="mu">(적의 반응 포함, 전황 변수 ±12% 불확실)</span>
+  el.style.opacity = previewStale ? "0.5" : "1";
+  el.innerHTML = `<b>${t.season} 예상</b> <span class="mu">(${previewStale ? "명령이 바뀌어 다시 계산하는 중… " : ""}적의 반응 포함, 전황 변수 ±12% 불확실)</span>
     영토 <span class="${dHa > 1 ? "good" : dHa < -1 ? "bad" : ""}">${dHa >= 0 ? "+" : ""}${fmt(dHa)}ha (${dPct >= 0 ? "+" : ""}${fmt(dPct, 2)}%p)</span> ·
     우리 병력 ${fmt(soldiersOf(player()))}→${fmt(preview.playerSoldiers)} (전사 약 ${fmt(preview.playerCasualties)}) ·
     적 ${fmt(soldiersOf(rival()))}→${fmt(preview.rivalSoldiers)} (전사 약 ${fmt(preview.rivalCasualties)}) ·
@@ -294,17 +301,19 @@ function renderAll() {
 /* ------------------------------------------------------------------ */
 /* 입력과 턴 진행                                                      */
 /* ------------------------------------------------------------------ */
-let previewQueued = false;
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
 function onOrdersChanged() {
-  // 끌고 있는 동안에는 예측을 프레임당 한 번만 계산한다
-  if (previewQueued) return;
-  previewQueued = true;
-  requestAnimationFrame(() => {
-    previewQueued = false;
+  // 끌고 있는 동안에는 낡은 예상을 흐리게 보여 주고, 멈춘 뒤 한 번만 다시 계산한다
+  if (busy) return;
+  previewStale = true;
+  renderAll();
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => {
     if (busy) return;
     refreshPreview();
+    previewStale = false;
     renderAll();
-  });
+  }, 220);
 }
 
 /** 한 턴(계절)을 진행한다. 진행 중에 다시 누르면 결과를 바로 보여 준다. */

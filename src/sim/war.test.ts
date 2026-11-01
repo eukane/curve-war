@@ -33,7 +33,8 @@ import {
 import { createWorld, disband, levy, popOf, previewTurn, setOrder, step, stepDay, totalPop } from "./world";
 import type { World } from "./world";
 
-const newWar = (seed = 1): World => createWorld(seed, WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2 } });
+/** 고정 규칙 AI(비교·회귀용). 탐색형은 ai.test.ts에서 따로 시험한다 */
+const newWar = (seed = 1): World => createWorld(seed, WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2, ai: { mode: "scripted" } } });
 const P = (w: World) => w.regions[0]!;
 const R = (w: World) => w.regions[1]!;
 const flat = (w: World, x = 500) => {

@@ -10,6 +10,9 @@ const dir = process.argv[2]!;
 const seed0 = Number(process.argv[3] ?? 1);
 const nSeeds = Number(process.argv[4] ?? 6);
 const maxTurns = Number(process.argv[5] ?? 24);
+/** 적 AI 설정: AI_MODE=scripted|search, AI_PROFILE=aggressor|cautious|opportunist (없으면 시드로 정함) */
+const aiMode = (process.env.AI_MODE as "scripted" | "search" | undefined) ?? "search";
+const aiProfile = process.env.AI_PROFILE;
 
 const load = (p: string) => import(pathToFileURL(join(dir, p)).href);
 
@@ -67,7 +70,7 @@ async function main() {
   for (const [name, pol] of Object.entries(policies)) {
     const m: Record<string, number[]> = { result: [], turns: [], area: [], starv: [], pop: [], soldiers: [], rivalSoldiers: [], stagnant: [], harvestT: [] };
     for (let s = 0; s < nSeeds; s++) {
-      const w = createWorld(seed0 + s, data.WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2 } });
+      const w = createWorld(seed0 + s, data.WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2, ai: { mode: aiMode, profile: aiProfile } } });
       let t = 0, stag = 0, last = playerAreaHa(w.war.front) / totalAreaHa();
       for (; t < maxTurns && !w.war.result; t++) {
         pol(w, t);

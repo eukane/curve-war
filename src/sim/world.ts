@@ -24,6 +24,7 @@ import { EVENTS } from "./events";
 import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
+import { pickProfile, planAi } from "./ai";
 import { aiPlan, beginTurn, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
@@ -37,11 +38,15 @@ import type { Checkpoint, Decision, Metrics, PendingEvent, Region, RegionSeed, S
 
 export * from "./state";
 
-export function createWorld(seed: number, seeds: RegionSeed[], opts?: { war?: { playerRegionId: number; rivalRegionId: number } }): World {
+export function createWorld(
+  seed: number,
+  seeds: RegionSeed[],
+  opts?: { war?: { playerRegionId: number; rivalRegionId: number; ai?: { mode?: "scripted" | "search"; profile?: string } } },
+): World {
   const w: World = {
     seed,
     day: 0,
-    war: opts?.war ? newWarState(opts.war.playerRegionId, opts.war.rivalRegionId) : null,
+    war: opts?.war ? newWarState(opts.war.playerRegionId, opts.war.rivalRegionId, { mode: opts.war.ai?.mode, profile: opts.war.ai?.profile ?? pickProfile(seed) }) : null,
     log: [],
     decisions: [],
     pending: null,
@@ -474,7 +479,11 @@ export function stepDay(w: World): boolean {
   if (w.war?.result) return false;
   if (openPendingIfTriggered(w)) return false;
   // 매 턴 초: 적이 병력과 명령선을 정한다 (플레이어와 같은 주기)
-  if (w.war && w.day % TURN_DAYS === 0) aiPlan(w);
+  if (w.war && w.day % TURN_DAYS === 0) {
+    if (w.war.ai.skipPlanOnce) w.war.ai.skipPlanOnce = false;
+    else if (w.war.ai.mode === "search") planAi(w, { clone: cloneWorld, step });
+    else aiPlan(w);
+  }
 
   const { year, dayOfYear } = dateOf(w.day);
 

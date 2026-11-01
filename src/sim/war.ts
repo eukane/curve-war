@@ -162,8 +162,8 @@ export function playerVillageCount(front: number[]): number {
 /* ------------------------------------------------------------------ */
 
 const regionOf = (w: World, id: number): Region => w.regions.find((r) => r.id === id)!;
-const playerRegion = (w: World): Region => regionOf(w, w.war!.playerRegionId);
-const rivalRegion = (w: World): Region => regionOf(w, w.war!.rivalRegionId);
+export const playerRegion = (w: World): Region => regionOf(w, w.war!.playerRegionId);
+export const rivalRegion = (w: World): Region => regionOf(w, w.war!.rivalRegionId);
 
 export const soldiersOf = (r: Region): number => popOf(r, "soldier");
 
@@ -515,7 +515,7 @@ export function aiPlan(w: World): void {
   });
 }
 
-export function newWarState(playerRegionId: number, rivalRegionId: number): WarState {
+export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: { mode?: "scripted" | "search"; profile?: string }): WarState {
   const front = initialFront();
   return {
     front,
@@ -524,7 +524,7 @@ export function newWarState(playerRegionId: number, rivalRegionId: number): WarS
     rivalRegionId,
     capitals: { player: { x: 90, y: 320 }, rival: { x: 910, y: 320 } },
     result: null,
-    ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02 },
+    ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02, mode: ai?.mode ?? "search", profile: ai?.profile ?? "aggressor" },
     reports: [],
     turnStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0, pop: 0 },
   };
