@@ -188,3 +188,13 @@ export const COMMANDER_LEVEL_GAIN = 0.3;
 export const COMMANDER_MISFIT_PENALTY = 0.05;
 /** 군수형이 구간의 보급 한계 거리를 늘리는 정도 (임시): × (1 + 이 값 × (1 + LEVEL_GAIN × 계급)) */
 export const COMMANDER_SUPPLY_BONUS = 0.25;
+
+/* ---- 지형과 조수 (단계 3). 모든 수치 임시 ---- */
+/** 갯벌의 이동 배율: 수위 0(간조, 마른 갯벌)에서 DRY, 수위 1(만조, 큰물)에서 WET. 사이는 직선 보간 */
+export const FLAT_MOVE_DRY = 1.25;
+export const FLAT_MOVE_WET = 0.2;
+/** 계절별 평균 수위(0~1): 봄, 여름, 가을, 겨울. 조수는 하루에도 오르내리지만, 한 계절 평균 수위로 줄여 쓴다(알려진 단순화) */
+export const TIDE_LEVEL_BY_SEASON = [0.5, 1.0, 0.4, 0.0] as const;
+/** 능선(산악)의 이동 배율, 그리고 능선을 고향으로 가진 쪽이 얻는 병력 밀도 증가분 */
+export const RIDGE_MOVE = 0.5;
+export const RIDGE_HOME_DENSITY_BONUS = 0.2;

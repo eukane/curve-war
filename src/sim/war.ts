@@ -34,6 +34,7 @@ import { TURN_DAYS, dateOf, turnOf } from "./calendar";
 import { Rng } from "./rng";
 import { popOf, seasonIndexOf, totalPop } from "./state";
 import { fortMultipliers, roadFalloffMultipliers } from "./structures";
+import { terrainMultipliers } from "./terrain";
 import { commanderDensityMultipliers, commanderSupplyMultipliers, startCommanders } from "./commanders";
 import type { Realm, Region, Stratum, TurnReport, WarState, World } from "./state";
 
@@ -240,10 +241,11 @@ export function computePressure(w: World, withLuck = false): Pressure {
   const supP = supplyMultipliers(war.front, war.capitals.player.x, roads.player.map((m, i) => m * cmdS.player[i]! * playerRegion(w).rules.supplyFalloffMult));
   const supR = supplyMultipliers(war.front, war.capitals.rival.x, roads.rival.map((m, i) => m * cmdS.rival[i]! * rivalRegion(w).rules.supplyFalloffMult));
   const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]! * forts.player[i]! * cmdD.player[i]!);
-  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]! * forts.rival[i]! * cmdD.rival[i]!);
+  const terr = terrainMultipliers(w);
+  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]! * forts.rival[i]! * cmdD.rival[i]! * terr.rivalDensity[i]!);
   const net = playerDensity.map((d, i) => d - rivalDensity[i]!);
   const vmaxUnits = (V_MAX_KM_PER_DAY / UNIT_KM) * SEASON_MOVE_MULT[seasonIndexOf(w.day)]!;
-  const force = net.map((n) => vmaxUnits * Math.tanh(n / PRESSURE_SCALE_PER_KM));
+  const force = net.map((n, i) => vmaxUnits * terr.move[i]! * Math.tanh(n / PRESSURE_SCALE_PER_KM));
   return { frontage, playerDensity, rivalDensity, net, force };
 }
 

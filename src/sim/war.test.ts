@@ -495,10 +495,10 @@ describe("균형 점검 (측정으로 고정한 동작, 사람이 해 보기 전
     }
   });
 
-  it("이기는 길이 있다: 적의 1.8배까지 병력을 모으고 중앙을 치면 30턴 안에 이기는 시드가 있다 (대가: 기아)", () => {
+  it("이기는 길이 있다: 적의 1.8배까지 병력을 모으고 중앙을 치면 48턴 안에 이기는 시드가 있다 (대가: 기아). 지형(단계 3) 도입 뒤 시드 1~6 중 1개만 이긴다 — 균형은 단계 7.5에서", () => {
     let wins = 0;
     let starved = 0;
-    for (const seed of [1, 2, 3]) {
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
       const w = newWar(seed);
       for (let t = 0; t < 48 && !w.war!.result; t++) {
         const rs = soldiersOf(R(w)), ps = soldiersOf(P(w));
@@ -517,7 +517,7 @@ describe("균형 점검 (측정으로 고정한 동작, 사람이 해 보기 전
       starved += P(w).starvationDeathsTotal;
     }
     expect(wins).toBeGreaterThanOrEqual(1);
-    expect(starved).toBeGreaterThan(1000); // 이기는 대가가 있다
+    expect(starved).toBeGreaterThan(5000); // 이기는 대가가 있다 (6개 시드 합)
   });
 
   it("병력을 크게 늘리면 농사 일손이 줄어 수확이 25% 넘게 준다 (총동원의 대가)", () => {
