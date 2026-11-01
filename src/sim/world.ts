@@ -27,6 +27,7 @@ import { Rng } from "./rng";
 import { pickProfile, planAi } from "./ai";
 import { aiEdicts, tickEdicts } from "./edicts";
 import { aiBuild, tickBuilds } from "./structures";
+import { aiCommanders, tickCommanders } from "./commanders";
 import { aiPlan, beginTurn, computePressure, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
@@ -490,6 +491,7 @@ export function stepDay(w: World): boolean {
     else aiPlan(w);
     aiEdicts(w);
     if (w.war.ai.edicts !== false) aiBuild(w, computePressure(w).net);
+    if (w.war.ai.edicts !== false) aiCommanders(w, computePressure(w).net);
   }
 
   const { year, dayOfYear } = dateOf(w.day);
@@ -516,6 +518,7 @@ export function stepDay(w: World): boolean {
   // 5) 전쟁과 법령
   tickEdicts(w);
   tickBuilds(w);
+  tickCommanders(w);
   stepWarDay(w);
 
   w.day += 1;

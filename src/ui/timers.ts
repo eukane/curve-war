@@ -6,12 +6,14 @@ import { TURN_DAYS, turnOf } from "../sim/calendar";
 import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEED_KG_PER_HA, SOWING_DAY_OF_YEAR } from "../sim/constants";
 import { soldiersOf, trainingCount } from "../sim/war";
 import { edictOf } from "../sim/edicts";
+import { ZONE_NAME as ZONE_NAMES, levelOf } from "../sim/commanders";
+import { COMMANDER_DAYS_PER_LEVEL, COMMANDER_MAX_LEVEL } from "../sim/constants";
 import { KIND_NAME } from "../sim/structures";
 import { fieldFarmersAt } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
 
 export interface Timer {
-  kind: "sow" | "harvest" | "train" | "rival" | "edict" | "build";
+  kind: "sow" | "harvest" | "train" | "rival" | "edict" | "build" | "cmd";
   /** 절대 일수 */
   day: number;
   title: string;
@@ -86,6 +88,15 @@ export function timersOf(w: World, preview: TurnPreview | null, horizonTurns = 2
       out.push({ kind: "build", day: w.day + left, title: `${KIND_NAME[b.kind]} 완공 (구간 ${b.sector + 1})`, detail: `인부 ${fmt(b.workers)}명이 돌아옵니다. (${b.progressDays}/${b.totalDays}일)`, level: "good" });
     } else {
       out.push({ kind: "build", day: w.day + left, title: `적이 ${KIND_NAME[b.kind]}를 짓는 중 (구간 ${b.sector + 1})`, detail: "완공되면 그 구간의 적 병력 밀도가 올라갑니다." });
+    }
+  }
+
+  // 지휘관 도착과 승급
+  for (const c of war.commanders.filter((x) => x.realm === "player")) {
+    if (c.toZone !== null) out.push({ kind: "cmd", day: c.arriveDay, title: `${c.name} 도착 (${ZONE_NAMES[c.toZone]})`, detail: "도착하면 그 구간에서 효과가 납니다.", level: "good" });
+    else if (c.zone !== null && levelOf(c) < COMMANDER_MAX_LEVEL) {
+      const left = COMMANDER_DAYS_PER_LEVEL - (c.workDays % COMMANDER_DAYS_PER_LEVEL);
+      out.push({ kind: "cmd", day: w.day + left, title: `${c.name} 승급 (${levelOf(c) + 1}급)`, detail: "효과가 커집니다.", level: "good" });
     }
   }
 

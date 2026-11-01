@@ -19,10 +19,13 @@ const playerEdicts = (process.env.PLAYER_EDICTS ?? "").split(",").filter(Boolean
 /** 플레이어 건설 정책: BUILD=fort,road (여름·겨울에 가장 밀리는 구간에 요새, 여름에 중앙 도로) */
 const playerBuild = (process.env.BUILD ?? "").split(",").filter(Boolean);
 
+/** 지휘관 배치: CMD=right(공세형 중부·수성형 북부·군수형 남부) | wrong(공세형 북부·수성형 중부·군수형 남부) */
+const cmdPlan = process.env.CMD ?? "";
+
 const load = (p: string) => import(pathToFileURL(join(dir, p)).href);
 
 async function main() {
-  const [world, war, data, cal, edicts, structs] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts"), load("sim/edicts.ts"), load("sim/structures.ts")]);
+  const [world, war, data, cal, edicts, structs, cmds] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts"), load("sim/edicts.ts"), load("sim/structures.ts"), load("sim/commanders.ts")]);
   const { createWorld, step, levy, disband, setOrder, startClearing, totalPop } = world;
   const { soldiersOf, readySoldiers, playerAreaHa, totalAreaHa } = war;
   const { dateOf } = cal;
@@ -81,6 +84,10 @@ async function main() {
       if (playerEdicts.length) {
         w.war.edicts.player.enacted = [...playerEdicts];
         edicts.recomputeRules(w);
+      }
+      if (cmdPlan) {
+        const z = cmdPlan === "right" ? [1, 0, 2] : [0, 1, 2];
+        [1, 2, 3].forEach((id, k) => cmds.assignCommander(w, "player", id, z[k]));
       }
       let t = 0, stag = 0, last = playerAreaHa(w.war.front) / totalAreaHa();
       for (; t < maxTurns && !w.war.result; t++) {

@@ -3,7 +3,7 @@
  * "언제나 할 일이 있다"는 원칙(CLAUDE.md 원칙 0-2)을 위한 것이다. 모든 문장은 현재 상태에서 계산한다.
  */
 import { TURN_DAYS, dateOf, turnOf } from "../sim/calendar";
-import { FORT_DAYS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "../sim/constants";
+import { COMMANDER_TRAVEL_DAYS, FORT_DAYS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "../sim/constants";
 import { computePressure, frontXAt, sectorName, soldiersOf, totalAreaHa, trainingCount } from "../sim/war";
 import { dailyNeedKg, fieldFarmersAt } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
@@ -24,6 +24,14 @@ export function advise(w: World, preview: TurnPreview | null = null): Advice[] {
   const { dayOfYear } = dateOf(w.day);
   void TURN_DAYS;
   const pr = computePressure(w);
+
+  // 지휘관: 놀고 있는 지휘관이 있으면 먼저 알린다 (적은 처음부터 배치한다)
+  {
+    const idle = war.commanders.filter((c) => c.realm === "player" && c.zone === null && c.toZone === null);
+    if (idle.length > 0) {
+      out.push({ level: "warn", title: "지휘관이 놀고 있다", text: `${idle.map((c) => c.name).join(", ")}을(를) 구간에 배치하세요. 배치하면 ${COMMANDER_TRAVEL_DAYS}일 뒤부터 효과가 나고, 오래 둘수록 계급이 오릅니다. 공세형은 앞으로 내미는 구간에, 수성형은 지키는 구간에 두는 것이 맞습니다.` });
+    }
+  }
 
   // 건설 권유: 여름·겨울(농사와 겹치지 않는 때)에 공사가 비어 있고 밀리는 구간이 있으면
   {

@@ -109,6 +109,13 @@
     .adv .danger { border-color:var(--bad); } .adv .danger b { color:var(--bad); }
     .adv .warn { border-color:var(--warn); } .adv .warn b { color:var(--warn); }
     .adv .chance { border-color:var(--chance); } .adv .chance b { color:var(--chance); }
+    .cmds { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+    .cmd { border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:12.5px; }
+    .cmd b.name { font-size:14px; }
+    .cmd .lv { display:inline-block; margin-left:6px; font-family:var(--mono); color:var(--mu); }
+    .cmd .bar { height:4px; background:var(--line); border-radius:2px; margin:6px 0; overflow:hidden; }
+    .cmd .bar i { display:block; height:100%; background:var(--a); }
+    .cmd .row button { padding:3px 10px; font-size:12px; }
     .builds { margin-top:10px; padding-top:8px; border-top:1px solid var(--line); }
     .builds h3 { margin:0 0 6px; font-size:13px; }
     .buildrow { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin-bottom:6px; font-size:12px; }
@@ -188,6 +195,7 @@
         <section><h2>선택한 구간</h2><div id="sector"></div></section>
         <section><h2>병력</h2><div id="army"></div></section>
       </div>
+      <section><h2>지휘관</h2><div id="cmds"></div></section>
       </div>
       <div class="side">
         <section class="sec-advice"><h2>참모의 보고</h2><ul class="adv" id="advice"></ul></section>

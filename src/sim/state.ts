@@ -41,6 +41,23 @@ export const defaultRules = (): Rules => ({
 
 export type StructureKind = "fort" | "road";
 
+export type CommanderTrait = "aggressive" | "defensive" | "logistician";
+
+/** 지휘관. 구간에 배치하면 그 구간의 병력 밀도나 보급에 영향을 준다 */
+export interface Commander {
+  id: number;
+  realm: Realm;
+  name: string;
+  trait: CommanderTrait;
+  /** 근무한 일수(누적). 계급 = floor(workDays / COMMANDER_DAYS_PER_LEVEL) */
+  workDays: number;
+  /** 지금 있는 구간 번호(없으면 대기) */
+  zone: number | null;
+  /** 이동 중이면 목적지와 도착일 */
+  toZone: number | null;
+  arriveDay: number;
+}
+
 /** 건설물. 공사 중이거나 완공된 요새와 도로 */
 export interface Structure {
   id: number;
@@ -255,6 +272,8 @@ export interface WarState {
   /** 건설물 (공사 중 포함) */
   structures: Structure[];
   nextStructureId: number;
+  /** 지휘관 */
+  commanders: Commander[];
   ai: {
     aggression: number;
     startDay: number;

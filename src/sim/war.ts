@@ -34,6 +34,7 @@ import { TURN_DAYS, dateOf, turnOf } from "./calendar";
 import { Rng } from "./rng";
 import { popOf, seasonIndexOf, totalPop } from "./state";
 import { fortMultipliers, roadFalloffMultipliers } from "./structures";
+import { commanderDensityMultipliers, commanderSupplyMultipliers, startCommanders } from "./commanders";
 import type { Realm, Region, Stratum, TurnReport, WarState, World } from "./state";
 
 /** 구간 이름: 위에서 아래로 북부, 중부, 남부 */
@@ -234,10 +235,12 @@ export function computePressure(w: World, withLuck = false): Pressure {
   const effR = effectiveSoldiers(rivalRegion(w), w.day, withLuck ? turnLuck(w, "rival") : 1);
   const roads = roadFalloffMultipliers(w);
   const forts = fortMultipliers(w);
-  const supP = supplyMultipliers(war.front, war.capitals.player.x, roads.player.map((m) => m * playerRegion(w).rules.supplyFalloffMult));
-  const supR = supplyMultipliers(war.front, war.capitals.rival.x, roads.rival.map((m) => m * rivalRegion(w).rules.supplyFalloffMult));
-  const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]! * forts.player[i]!);
-  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]! * forts.rival[i]!);
+  const cmdD = commanderDensityMultipliers(w);
+  const cmdS = commanderSupplyMultipliers(w);
+  const supP = supplyMultipliers(war.front, war.capitals.player.x, roads.player.map((m, i) => m * cmdS.player[i]! * playerRegion(w).rules.supplyFalloffMult));
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x, roads.rival.map((m, i) => m * cmdS.rival[i]! * rivalRegion(w).rules.supplyFalloffMult));
+  const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]! * forts.player[i]! * cmdD.player[i]!);
+  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]! * forts.rival[i]! * cmdD.rival[i]!);
   const net = playerDensity.map((d, i) => d - rivalDensity[i]!);
   const vmaxUnits = (V_MAX_KM_PER_DAY / UNIT_KM) * SEASON_MOVE_MULT[seasonIndexOf(w.day)]!;
   const force = net.map((n) => vmaxUnits * Math.tanh(n / PRESSURE_SCALE_PER_KM));
@@ -534,6 +537,7 @@ export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: 
     edicts: { player: { enacted: [], researching: null }, rival: { enacted: [], researching: null } },
     structures: [],
     nextStructureId: 1,
+    commanders: startCommanders(),
     reports: [],
     turnStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0, pop: 0 },
   };

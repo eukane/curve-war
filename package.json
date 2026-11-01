@@ -12,7 +12,8 @@
     "audit": "tsx tools/audit/sensitivity.ts .audit-work 4 && tsx tools/audit/analyze.ts .audit-work",
     "audit:ai": "tsx tools/audit/ai-compare.ts",
     "audit:edicts": "tsx tools/audit/edict-compare.ts",
-    "audit:build": "tsx tools/audit/build-compare.ts"
+    "audit:build": "tsx tools/audit/build-compare.ts",
+    "audit:cmd": "tsx tools/audit/cmd-compare.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15",

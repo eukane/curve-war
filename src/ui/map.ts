@@ -5,6 +5,8 @@
 import { MAP_H, MAP_W, UNIT_KM } from "../sim/constants";
 import { VILLAGES, computePressure, frontY, sampleFront, trainingCount } from "../sim/war";
 import { popOf, totalPop } from "../sim/state";
+import { COMMAND_ZONES } from "../sim/constants";
+import { TRAIT_NAME, ZONE_NAME, levelOf } from "../sim/commanders";
 import { fortController } from "../sim/structures";
 import { setOrder } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
@@ -309,6 +311,32 @@ export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hook
       ctx.textAlign = "center";
       ctx.fillText(name, c.x, c.y + 26 / k);
     }
+    // 지휘 구간: 경계 눈금과 이름표(지휘관, 성향, 계급). 비어 있으면 "배치 가능"을 표시한다
+    COMMAND_ZONES.forEach(([a, b], z) => {
+      const y0 = frontY(a) - (a === 0 ? 0 : 20), y1 = frontY(b) + (b === 16 ? 0 : 20);
+      ctx.strokeStyle = ink;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1.5 / k;
+      line(10, y0 + 4 / k, 10, y1 - 4 / k);
+      ctx.globalAlpha = 1;
+      const mine = war.commanders.filter((c) => c.realm === "player" && (c.toZone ?? c.zone) === z)[0];
+      const label = mine
+        ? mine.toZone !== null
+          ? `${ZONE_NAME[z]} · ${mine.name} 이동 중 ${mine.arriveDay - w.day}일`
+          : `${ZONE_NAME[z]} · ${mine.name}(${TRAIT_NAME[mine.trait]} ${levelOf(mine)}급)`
+        : `${ZONE_NAME[z]} · 지휘관 없음`;
+      ctx.font = `${11 / k}px "Noto Sans KR", system-ui, sans-serif`;
+      ctx.textAlign = "left";
+      const tw = ctx.measureText(label).width;
+      const ly = y0 + 16 / k; // 구간 위쪽에 둔다 (수도 이름표와 겹치지 않게)
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = panel;
+      ctx.fillRect(14, ly - 9 / k, tw + 10 / k, 16 / k);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = mine ? colP : ink;
+      ctx.fillText(label, 14 + 5 / k, ly + 3.5 / k);
+    });
+
     // 건설: 도로는 수도에서 그 구간까지 선, 요새는 전선 뒤(앞) 네모. 공사 중이면 점선과 진행 막대
     for (const st of war.structures) {
       const mine = st.realm === "player";

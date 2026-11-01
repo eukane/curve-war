@@ -172,3 +172,19 @@ export const ROAD_WORKERS = 500;
 export const ROAD_DAYS = 180;
 export const ROAD_FALLOFF_BONUS = 0.5;
 export const ROAD_SPREAD_POINTS = 3;
+
+/* ---- 지휘관 (단계 2c). 모든 수치 임시 ---- */
+/** 전선을 나누는 지휘 구간: 점 번호 경계(포함). 북부 0~5, 중부 6~10, 남부 11~16 */
+export const COMMAND_ZONES: readonly [number, number][] = [[0, 5], [6, 10], [11, 16]];
+/** 지휘관이 새 구간으로 가는 데 걸리는 날수. 가는 동안 어느 구간에도 효과가 없다 (임시) */
+export const COMMANDER_TRAVEL_DAYS = 30;
+/** 한 계급 오르는 데 필요한 근무 일수 (임시). 최대 계급 3 */
+export const COMMANDER_DAYS_PER_LEVEL = 180;
+export const COMMANDER_MAX_LEVEL = 3;
+/** 기본 효과 크기와 계급당 증가율 (임시): 효과 = BASE × (1 + LEVEL_GAIN × 계급) */
+export const COMMANDER_BASE_EFFECT = 0.08;
+export const COMMANDER_LEVEL_GAIN = 0.3;
+/** 성향에 맞지 않는 명령일 때의 불이익 (임시) */
+export const COMMANDER_MISFIT_PENALTY = 0.05;
+/** 군수형이 구간의 보급 한계 거리를 늘리는 정도 (임시): × (1 + 이 값 × (1 + LEVEL_GAIN × 계급)) */
+export const COMMANDER_SUPPLY_BONUS = 0.25;

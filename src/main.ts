@@ -3,6 +3,8 @@ import { TURN_DAYS, turnOf } from "./sim/calendar";
 import { FORT_DENSITY_BONUS, FORT_OFFSET_UNITS, EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
 import { EDICTS, cancelEdictResearch, edictOf, repealEdict, startEdict } from "./sim/edicts";
 import { profileOf } from "./sim/ai";
+import { TRAIT_NAME, TRAIT_TEXT, ZONE_NAME, assignCommander, effectOf, levelOf } from "./sim/commanders";
+import { COMMANDER_DAYS_PER_LEVEL, COMMANDER_MAX_LEVEL, COMMANDER_TRAVEL_DAYS } from "./sim/constants";
 import { KIND_NAME, buildInfo, canBuild, cancelBuild, fortMultipliers, roadFalloffMultipliers, startBuild } from "./sim/structures";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
@@ -291,6 +293,35 @@ function buildHtml(i: number): string {
   return `<div class="builds"><h3>건설</h3>${rows.join("")}${busyField ? `<p class="note warnline">지금은 ${season} — 인부를 빼면 ${season === "봄" ? "파종" : "수확"} 일손이 줄어 곡식을 덜 거둡니다. 여름이나 겨울이 안전합니다.</p>` : ""}${buildListHtml()}</div>`;
 }
 
+function renderCommanders() {
+  const el = $("cmds");
+  const list = world.war!.commanders.filter((c) => c.realm === "player");
+  el.innerHTML = `<div class="cmds">${list
+    .map((c) => {
+      const lv = levelOf(c);
+      const nextIn = lv >= COMMANDER_MAX_LEVEL ? null : COMMANDER_DAYS_PER_LEVEL - (c.workDays % COMMANDER_DAYS_PER_LEVEL);
+      const pct = lv >= COMMANDER_MAX_LEVEL ? 100 : ((c.workDays % COMMANDER_DAYS_PER_LEVEL) / COMMANDER_DAYS_PER_LEVEL) * 100;
+      const here = c.toZone ?? c.zone;
+      const status = c.toZone !== null ? `${ZONE_NAME[c.toZone]}로 이동 중 (${c.arriveDay - world.day}일 뒤 도착)` : c.zone !== null ? `${ZONE_NAME[c.zone]}에 배치됨` : "대기 중 — 효과 없음";
+      const btns = ZONE_NAME.map((n, z) => {
+        const other = world.war!.commanders.find((x) => x.realm === "player" && x.id !== c.id && (x.toZone ?? x.zone) === z);
+        const cur = here === z;
+        return `<button data-cmd="${c.id}" data-zone="${z}" aria-pressed="${cur}" ${cur || other ? "disabled" : ""} title="${other ? `${other.name}이(가) 있습니다` : `${n}에 보내기 (${COMMANDER_TRAVEL_DAYS}일 걸림)`}">${n}</button>`;
+      }).join("");
+      return `<div class="cmd"><b class="name">${esc(c.name)}</b> <span class="mu">${TRAIT_NAME[c.trait]}</span><span class="lv">${lv}급 · 효과 ${c.trait === "logistician" ? "보급 +" : "밀도 ±"}${fmt(effectOf(c) * 100, 0)}%</span>
+        <div class="bar" title="${nextIn === null ? "최고 계급" : `다음 계급까지 ${nextIn}일`}"><i style="width:${pct}%"></i></div>
+        <p class="note" style="margin:0 0 6px">${TRAIT_TEXT[c.trait]}</p>
+        <div class="mu" style="margin-bottom:6px"><b>${status}</b></div>
+        <div class="row">${btns}${here !== null ? `<button data-cmd="${c.id}" data-zone="-1">대기</button>` : ""}</div></div>`;
+    })
+    .join("")}</div>`;
+  el.querySelectorAll<HTMLButtonElement>("button[data-cmd]").forEach((b) => b.addEventListener("click", () => {
+    const z = Number(b.dataset.zone);
+    assignCommander(world, "player", Number(b.dataset.cmd), z < 0 ? null : z);
+    onOrdersChanged();
+  }));
+}
+
 function renderArmy() {
   const P = player();
   const farmers = popOf(P, "farmer");
@@ -427,6 +458,7 @@ function renderAll() {
   renderAdvice();
   renderTimers();
   renderSector();
+  renderCommanders();
   renderArmy();
   renderPreview();
   renderReports();
