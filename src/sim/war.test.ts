@@ -11,6 +11,8 @@ import {
   UNIT_KM,
 } from "./constants";
 import {
+  readySoldiers,
+  trainingCount,
   VILLAGES,
   aiPlan,
   computePressure,
@@ -28,7 +30,7 @@ import {
   totalAreaHa,
   transferLand,
 } from "./war";
-import { createWorld, disband, levy, popOf, previewMonth, setOrder, step, stepDay, totalPop } from "./world";
+import { createWorld, disband, levy, popOf, previewTurn, setOrder, step, stepDay, totalPop } from "./world";
 import type { World } from "./world";
 
 const newWar = (seed = 1): World => createWorld(seed, WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2 } });
@@ -130,7 +132,7 @@ describe("징집과 병력", () => {
 
   it("징집에는 상한(농민+병사의 40%)이 있다", () => {
     const w = newWar();
-    const took = levyTroops(P(w), 1_000_000);
+    const took = levyTroops(P(w), 1_000_000, 0);
     expect(soldiersOf(P(w))).toBeLessThanOrEqual((18_000 + 1_000) * 0.4 + 1e-6);
     expect(took).toBeGreaterThan(0);
     expect(levy(w, 1, 100)).toMatchObject({ ok: false });
@@ -138,7 +140,7 @@ describe("징집과 병력", () => {
 
   it("해산할 병사보다 많이 해산할 수 없다", () => {
     const w = newWar();
-    expect(disbandTroops(P(w), 99_999)).toBe(1000);
+    expect(disbandTroops(P(w), 99_999, 0)).toBe(1000);
     expect(soldiersOf(P(w))).toBe(0);
   });
 
@@ -156,8 +158,91 @@ describe("징집과 병력", () => {
   it("굶는 군대는 약하다: 유효 병력 = 병력 × (1 − 식량 부족률)", () => {
     const w = newWar();
     P(w).lastDeficit = 0.4;
-    expect(effectiveSoldiers(P(w))).toBeCloseTo(600, 9);
-    expect(effectiveSoldiers(P(w), 1.1)).toBeCloseTo(660, 9);
+    expect(effectiveSoldiers(P(w), 0)).toBeCloseTo(600, 9);
+    expect(effectiveSoldiers(P(w), 0, 1.1)).toBeCloseTo(660, 9);
+  });
+});
+
+describe("훈련", () => {
+  it("징집한 병사는 60일 동안 싸우지 못하고, 그 뒤에 전력이 된다", () => {
+    const w = newWar();
+    levy(w, 1, 1000);
+    expect(soldiersOf(P(w))).toBe(2000);
+    expect(readySoldiers(P(w), w.day)).toBe(1000);
+    expect(trainingCount(P(w), w.day)).toBe(1000);
+    expect(readySoldiers(P(w), 59)).toBe(1000);
+    expect(readySoldiers(P(w), 60)).toBe(2000);
+  });
+
+  it("훈련 중인 병사는 곡식을 먹고 농사를 짓지 못하며, 유효 병력에 들어가지 않는다", () => {
+    const w = newWar();
+    const f0 = popOf(P(w), "farmer");
+    levy(w, 1, 1000);
+    expect(popOf(P(w), "farmer")).toBe(f0 - 1000);
+    expect(effectiveSoldiers(P(w), 0)).toBe(1000); // 훈련 중 1,000명은 제외
+    expect(totalPop(P(w))).toBeCloseTo(30_000, 6); // 곡식은 모두 먹는다(총 인구 불변)
+  });
+
+  it("훈련 중에는 사상자가 나오지 않는다 (싸우는 병사만 죽는다)", () => {
+    const w = newWar();
+    flat(w);
+    w.day = 1;
+    w.war!.expected = true;
+    levy(w, 1, 1000);
+    P(w).trainees = [{ readyDay: 61, n: 1000 }];
+    const total0 = soldiersOf(P(w));
+    stepDay(w);
+    // 전사는 훈련을 마친 1,000명 중에서만 나온다: 하루 0.0005 × 적 유효 병력
+    expect(total0 - soldiersOf(P(w))).toBeCloseTo(CASUALTY_RATE_PER_DAY * 1000, 6);
+    expect(trainingCount(P(w), w.day)).toBe(1000);
+  });
+
+  it("해산은 훈련 중인 병사(가장 최근 징집분)부터 취소한다", () => {
+    const w = newWar();
+    levy(w, 1, 1000); // 훈련 중 1,000
+    const f1 = popOf(P(w), "farmer");
+    disband(w, 1, 400);
+    expect(trainingCount(P(w), w.day)).toBe(600);
+    expect(soldiersOf(P(w))).toBe(1600);
+    expect(popOf(P(w), "farmer")).toBe(f1 + 400);
+    disband(w, 1, 1000); // 남은 훈련병 600 + 기존 병사 400
+    expect(trainingCount(P(w), w.day)).toBe(0);
+    expect(soldiersOf(P(w))).toBe(600);
+  });
+});
+
+describe("턴(계절)", () => {
+  it("한 턴은 90일이고 봄·여름·가을·겨울 순서다", async () => {
+    const { turnOf, TURN_DAYS } = await import("./calendar");
+    expect(TURN_DAYS).toBe(90);
+    expect(turnOf(0)).toMatchObject({ index: 0, year: 0, season: "봄", startDay: 0, endDay: 90 });
+    expect(turnOf(89).season).toBe("봄");
+    expect(turnOf(90)).toMatchObject({ index: 1, season: "여름", dayInTurn: 0 });
+    expect(turnOf(240).season).toBe("가을"); // 수확일
+    expect(turnOf(60).season).toBe("봄"); // 파종일
+    expect(turnOf(360)).toMatchObject({ index: 4, year: 1, season: "봄" });
+  });
+
+  it("적도 플레이어와 같은 주기(턴 경계)에만 계획을 바꾼다", () => {
+    const w = newWar();
+    levy(w, 1, 3000);
+    step(w, 1); // 0일: 적이 계획
+    const afterFirst = soldiersOf(R(w));
+    step(w, 80); // 턴 중간에는 적이 징집·해산을 하지 않는다: 줄어든다면 전사 때문이다
+    expect(soldiersOf(R(w))).toBeLessThanOrEqual(afterFirst + 1e-9);
+    expect(soldiersOf(R(w))).toBeGreaterThan(afterFirst - 200);
+  });
+
+  it("전황 변수는 이동에도 영향을 준다 (화면용 압력은 변수를 모른다)", () => {
+    const w = newWar();
+    flat(w);
+    levy(w, 1, 1000);
+    P(w).trainees = [];
+    const shown = computePressure(w); // 화면에 보이는 값: 변수 없음
+    const real = computePressure(w, true);
+    expect(real.net[8]).not.toBe(shown.net[8]);
+    w.war!.expected = true;
+    expect(computePressure(w, true).net[8]).toBeCloseTo(shown.net[8]!, 9);
   });
 });
 
@@ -174,6 +259,7 @@ describe("압력과 전선 이동", () => {
     const w = newWar();
     flat(w);
     levy(w, 1, 2000);
+    P(w).trainees = []; // 훈련을 마친 상태
     const pr = computePressure(w);
     expect(pr.net.every((n) => n > 0)).toBe(true);
     expect(pr.force.every((f) => f > 0)).toBe(true);
@@ -185,6 +271,7 @@ describe("압력과 전선 이동", () => {
     w.weatherOverride = () => 1;
     flat(w);
     levy(w, 1, 2000);
+    P(w).trainees = []; // 훈련을 마친 상태
     w.war!.orders.player[8] = 530; // 점 8만 30단위 앞으로
     step(w, 60);
     expect(w.war!.front[8]!).toBeGreaterThan(505); // 실제로 전진했다 (적도 이 구간에 병력을 몰아 맞서므로 느리다)
@@ -264,13 +351,31 @@ describe("승패", () => {
 });
 
 describe("월간 보고와 예측", () => {
-  it("30일마다 보고서가 하나 생기고, 사상자가 날마다의 합과 같다", () => {
+  it("90일(한 계절)마다 보고서가 하나 생기고, 계절과 사상자가 맞다", () => {
     const w = newWar();
-    step(w, 60);
+    step(w, 180);
     expect(w.war!.reports.length).toBe(2);
     const r = w.war!.reports[0]!;
+    expect(r.season).toBe("봄");
+    expect(w.war!.reports[1]!.season).toBe("여름");
     expect(r.playerCasualties).toBeGreaterThan(0);
     expect(r.playerSoldiersStart - r.playerSoldiersEnd).toBeGreaterThan(0);
+  });
+
+  it("봄 보고에는 파종 결과가, 가을 보고에는 수확 결과가 있고 나머지 계절에는 없다", () => {
+    const w = newWar(2);
+    w.weatherOverride = () => 1.0;
+    step(w, 360);
+    const [spring, summer, autumn, winter] = w.war!.reports;
+    expect(spring!.sowing!.sownHa).toBeGreaterThan(10_000);
+    expect(spring!.harvest).toBeNull();
+    expect(summer!.sowing).toBeNull();
+    expect(summer!.harvest).toBeNull();
+    expect(autumn!.harvest!.netKg).toBeGreaterThan(3_000_000);
+    expect(autumn!.harvest!.weather).toBeCloseTo(1, 9);
+    expect(winter!.sowing).toBeNull();
+    expect(winter!.harvest).toBeNull();
+    expect(winter!.popEnd).toBeGreaterThan(0);
   });
 
   it("전황 변수를 평균으로 두면 예측이 실제와 정확히 일치한다 (예측이 정직하다)", () => {
@@ -278,11 +383,11 @@ describe("월간 보고와 예측", () => {
     w.weatherOverride = () => 1.0;
     levy(w, 1, 1500);
     for (let i = 0; i < 8; i++) setOrder(w, i + 4, w.war!.front[i + 4]! + 40);
-    step(w, 120); // 공세 시작일(90일)을 지나 AI가 움직이는 상태
+    step(w, 180); // 공세 시작일(90일)을 지나 AI가 움직이는 상태
     for (let i = 0; i < FRONT_POINTS; i++) setOrder(w, i, w.war!.front[i]! + (i === 8 ? 50 : 0));
     w.war!.expected = true;
-    const pv = previewMonth(w)!;
-    step(w, 30);
+    const pv = previewTurn(w)!;
+    step(w, 90);
     pv.front.forEach((x, i) => expect(w.war!.front[i]!).toBeCloseTo(x, 6));
     expect(soldiersOf(P(w))).toBeCloseTo(pv.playerSoldiers, 6);
     expect(soldiersOf(R(w))).toBeCloseTo(pv.rivalSoldiers, 6);
@@ -291,17 +396,17 @@ describe("월간 보고와 예측", () => {
   it("예측용 복제는 원본을 바꾸지 않는다", () => {
     const w = newWar();
     const before = JSON.stringify({ d: w.day, f: w.war!.front, p: totalPop(P(w)), r: w.war!.reports.length });
-    previewMonth(w);
+    previewTurn(w);
     expect(JSON.stringify({ d: w.day, f: w.war!.front, p: totalPop(P(w)), r: w.war!.reports.length })).toBe(before);
   });
 
   it("전황 변수는 재현되고 ±12% 안에 있다", async () => {
-    const { monthLuck } = await import("./war");
+    const { turnLuck } = await import("./war");
     const w = newWar(5);
     for (let m = 0; m < 200; m++) {
-      w.day = m * 30;
-      const a = monthLuck(w, "player");
-      expect(a).toBe(monthLuck(w, "player"));
+      w.day = m * 90;
+      const a = turnLuck(w, "player");
+      expect(a).toBe(turnLuck(w, "player"));
       expect(a).toBeGreaterThanOrEqual(0.88 - 1e-9);
       expect(a).toBeLessThanOrEqual(1.12 + 1e-9);
     }
@@ -317,21 +422,24 @@ describe("적 AI", () => {
     expect(soldiersOf(R(a))).toBe(soldiersOf(R(b)));
   });
 
-  it("우리 병력을 보고 따라 징집한다 (평시 90%)", () => {
+  it("우리 병력을 보고 따라 징집한다 (평시 105%, 훈련 기간은 우리와 같다)", () => {
     const w = newWar();
     levy(w, 1, 3000); // 우리 4,000
-    for (let m = 0; m < 6; m++) step(w, 30);
-    expect(soldiersOf(R(w))).toBeGreaterThan(3000);
+    step(w, 1); // 0일째에 AI가 계획한다
+    expect(soldiersOf(R(w))).toBeGreaterThan(3500);
+    expect(trainingCount(R(w), w.day)).toBeGreaterThan(1500); // 징집한 병사는 곧바로 전력이 아니다
+    step(w, 70);
+    expect(trainingCount(R(w), w.day)).toBe(0); // 60일 뒤에는 전력이 된다
   });
 
-  it("수확 철에는 병력을 줄여 일손을 돌려보낸다", () => {
+  it("수확이 있는 턴(가을)이 시작되면 병력을 줄여 일손을 돌려보낸다", () => {
     const w = newWar();
     levy(w, 1, 2000);
-    step(w, HARVEST_DAY_OF_YEAR - 40);
+    step(w, 175);
     const before = soldiersOf(R(w));
-    step(w, 60); // 수확 철을 통과
-    expect(dateOf(w.day).dayOfYear).toBeGreaterThan(HARVEST_DAY_OF_YEAR - 25);
-    expect(soldiersOf(R(w))).toBeLessThan(before * 0.85);
+    step(w, 10); // 180일: 가을 턴 시작
+    expect(dateOf(w.day).dayOfYear).toBeGreaterThan(HARVEST_DAY_OF_YEAR - 70);
+    expect(soldiersOf(R(w))).toBeLessThan(before * 0.75);
   });
 
   it("우리가 명령선을 내민 곳에 적도 병력을 몰아 맞선다 (방어 집중)", () => {
@@ -340,7 +448,7 @@ describe("적 AI", () => {
     w.day = 30;
     w.war!.orders.player[8] = 590;
     aiPlan(w);
-    expect(w.war!.orders.rival[8]!).toBeLessThan(w.war!.front[8]! - 40);
+    expect(w.war!.orders.rival[8]!).toBeLessThan(w.war!.front[8]! - 70);
     expect(w.war!.orders.rival[0]!).toBeCloseTo(w.war!.front[0]!, 6);
   });
 
@@ -356,34 +464,59 @@ describe("적 AI", () => {
 });
 
 describe("균형 점검 (측정으로 고정한 동작, 사람이 해 보기 전의 근사)", () => {
-  it("아무것도 안 하면 진다 (측정: 17~19개월)", () => {
+  it("아무것도 안 하면 진다 (측정: 12~14턴, 3~3.5년)", () => {
     for (const seed of [1, 2, 3]) {
       const w = newWar(seed);
-      let months = 0;
-      while (!w.war!.result && months < 36) {
-        step(w, 30);
-        months++;
+      let turns = 0;
+      while (!w.war!.result && turns < 24) {
+        step(w, 90);
+        turns++;
       }
       expect(w.war!.result).toBe("loss");
-      expect(months).toBeGreaterThan(8);
+      expect(turns).toBeGreaterThan(6);
     }
   });
 
-  it("적 병력을 보고 병력을 맞추고 적의 집중 지점에 맞대응하면 8년 동안 지지 않는다", () => {
+  it("적 병력을 보고 병력을 맞추고 적의 집중 지점에 맞대응하면 10년 동안 지지 않는다 (측정: 영토 45~54%)", () => {
     for (const seed of [1, 2]) {
       const w = newWar(seed);
-      for (let m = 0; m < 60 && !w.war!.result; m++) {
+      for (let t = 0; t < 40 && !w.war!.result; t++) {
         const rs = soldiersOf(R(w)), ps = soldiersOf(P(w));
-        const want = Math.round(rs * 1.1);
+        const want = Math.round(rs * (dateOf(w.day).season === "가을" ? 0.8 : 1.1));
         if (want > ps) levy(w, 1, want - ps);
         else if (want < ps) disband(w, 1, ps - want);
         const f = w.war!.front, oR = w.war!.orders.rival;
-        for (let i = 0; i < f.length; i++) setOrder(w, i, f[i]! + Math.max(0, f[i]! - oR[i]!) * 0.9);
-        step(w, 30);
+        for (let i = 0; i < f.length; i++) setOrder(w, i, f[i]! + Math.max(0, f[i]! - oR[i]!));
+        step(w, 90);
       }
       expect(w.war!.result).not.toBe("loss");
-      expect(playerAreaHa(w.war!.front) / totalAreaHa()).toBeGreaterThan(0.45);
+      expect(playerAreaHa(w.war!.front) / totalAreaHa()).toBeGreaterThan(0.35);
     }
+  });
+
+  it("이기는 길이 있다: 적의 1.8배까지 병력을 모으고 중앙을 치면 30턴 안에 이기는 시드가 있다 (대가: 기아)", () => {
+    let wins = 0;
+    let starved = 0;
+    for (const seed of [1, 2, 3]) {
+      const w = newWar(seed);
+      for (let t = 0; t < 48 && !w.war!.result; t++) {
+        const rs = soldiersOf(R(w)), ps = soldiersOf(P(w));
+        const want = Math.round(rs * (dateOf(w.day).season === "가을" ? 0.9 : 1.8));
+        if (want > ps) levy(w, 1, want - ps);
+        else if (want < ps) disband(w, 1, ps - want);
+        const f = w.war!.front, oR = w.war!.orders.rival;
+        const strike = readySoldiers(P(w), w.day) > 1.1 * rs;
+        for (let i = 0; i < f.length; i++) {
+          const g = Math.exp(-(((i - 8) / 2.2) ** 2));
+          setOrder(w, i, f[i]! + Math.max(Math.max(0, f[i]! - oR[i]!), strike ? 80 * g : 0));
+        }
+        step(w, 90);
+      }
+      if (w.war!.result === "win") wins++;
+      starved += P(w).starvationDeathsTotal;
+    }
+    expect(wins).toBeGreaterThanOrEqual(1);
+    expect(starved).toBeGreaterThan(1000); // 이기는 대가가 있다
   });
 
   it("병력을 크게 늘리면 농사 일손이 줄어 수확이 25% 넘게 준다 (총동원의 대가)", () => {

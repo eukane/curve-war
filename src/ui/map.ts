@@ -3,10 +3,10 @@
  * 원칙 0-2: 지도가 화면의 중심이고, 조작은 지도 위에서 직접 한다.
  */
 import { MAP_H, MAP_W, UNIT_KM } from "../sim/constants";
-import { VILLAGES, computePressure, frontY, sampleFront } from "../sim/war";
+import { VILLAGES, computePressure, frontY, sampleFront, trainingCount } from "../sim/war";
 import { popOf, totalPop } from "../sim/state";
 import { setOrder } from "../sim/world";
-import type { MonthPreview, World } from "../sim/world";
+import type { TurnPreview, World } from "../sim/world";
 
 const SIGMA = 1.4; // 끌 때 이웃 점이 따라오는 정도(점 개수 단위)
 const HIT_PX = 20;
@@ -18,7 +18,7 @@ export interface MapHooks {
 }
 
 export interface MapView {
-  draw: (selected: number | null, preview: MonthPreview | null) => void;
+  draw: (selected: number | null, preview: TurnPreview | null) => void;
   /** 선택한 점의 명령선을 키보드로 움직인다 */
   nudge: (i: number, dx: number) => void;
 }
@@ -28,7 +28,7 @@ const css = (name: string, fallback: string): string => getComputedStyle(documen
 export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hooks: MapHooks): MapView {
   const ctx = canvas.getContext("2d")!;
   let selected: number | null = null;
-  let lastPreview: MonthPreview | null = null;
+  let lastPreview: TurnPreview | null = null;
   let dragging: number | null = null;
   let snapshot: number[] = [];
   let hover: number | null = null;
@@ -42,7 +42,7 @@ export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hook
     canvas.style.height = `${h}px`;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
-    redraw();
+    paint(); // 크기를 바꾸면 캔버스가 비워지므로, 한 프레임도 비지 않게 곧바로 그린다
   }
   new ResizeObserver(resize).observe(canvas);
 
@@ -307,6 +307,28 @@ export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hook
       ctx.font = `${12 / k}px "Noto Sans KR", system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.fillText(name, c.x, c.y + 26 / k);
+    }
+    // 훈련 중인 병사: 수도 아래에 진행 상황을 보여 준다
+    {
+      const P = w.regions.find((r) => r.id === war.playerRegionId)!;
+      const n = trainingCount(P, w.day);
+      if (n > 0) {
+        const next = Math.min(...P.trainees.filter((t) => t.readyDay > w.day).map((t) => t.readyDay));
+        const c = war.capitals.player;
+        ctx.fillStyle = colP;
+        ctx.font = `${11 / k}px "IBM Plex Mono", monospace`;
+        ctx.textAlign = "center";
+        const label = `훈련 ${Math.round(n).toLocaleString("ko-KR")}명 · ${next - w.day}일`;
+        // 좁은 화면에서 글자가 지도 밖으로 잘리지 않도록 가운데 위치를 안쪽으로 당긴다
+        const half = ctx.measureText(label).width / 2 + 4 / k;
+        const lx = Math.max(half, Math.min(MAP_W - half, c.x));
+        ctx.fillText(label, lx, c.y + 42 / k);
+        const bw = 70 / k;
+        ctx.strokeStyle = colP;
+        ctx.lineWidth = 1.5 / k;
+        ctx.strokeRect(lx - bw / 2, c.y + 47 / k, bw, 5 / k);
+        ctx.fillRect(lx - bw / 2, c.y + 47 / k, bw * (1 - (next - w.day) / 60), 5 / k);
+      }
     }
 
     // 축척

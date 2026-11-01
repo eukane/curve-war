@@ -129,3 +129,11 @@ export const LUCK_SPREAD = 0.12;
 export const SUPPLY_FALLOFF_UNITS = 1600;
 /** 보급 배율의 하한. 단위: 무차원. 임시. */
 export const SUPPLY_MIN = 0.35;
+
+/** 징집한 농민이 전력이 되기까지의 훈련 기간. 단위: 일. 임시. 근거 없음.
+ *  그동안 병사는 농사를 짓지 못하고 곡식을 먹지만 싸우지 못한다. 기습 동원을 막는 시간차다. */
+export const LEVY_TRAINING_DAYS = 60;
+/** 적 AI가 한 턴(계절)에 바꿀 수 있는 병력 규모. 농민 대비. 단위: 무차원. 임시. (월 8% × 3) */
+export const AI_MAX_LEVY_SHARE_PER_TURN = 0.24;
+/** 적 AI가 한 턴에 명령선을 내미는 최대 깊이 = 공격성 × 이 값. 단위: 지도 단위. 임시. */
+export const AI_PUSH_DEPTH_UNITS = 150;

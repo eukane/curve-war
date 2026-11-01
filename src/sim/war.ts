@@ -8,27 +8,31 @@
  * - 주민·경지는 땅에 붙어 있어서, 땅이 넘어가면 넓이 비율만큼 함께 넘어간다.
  */
 import {
+  AI_MAX_LEVY_SHARE_PER_TURN,
+  AI_PUSH_DEPTH_UNITS,
   CASUALTY_RATE_PER_DAY,
   FOCUS_MAX_BONUS,
   FOCUS_REF_UNITS,
   FRONT_POINTS,
   HARVEST_DAY_OF_YEAR,
   HA_PER_UNIT2,
+  LEVY_TRAINING_DAYS,
   LUCK_SPREAD,
   MAP_H,
   MAP_W,
   MAX_LEVY_SHARE_OF_FARMERS,
   PRESSURE_SCALE_PER_KM,
+  SOWING_DAY_OF_YEAR,
   SUPPLY_FALLOFF_UNITS,
   SUPPLY_MIN,
   UNIT_KM,
   V_MAX_KM_PER_DAY,
   V_RETREAT_UNITS,
 } from "./constants";
-import { dateOf } from "./calendar";
+import { TURN_DAYS, dateOf, turnOf } from "./calendar";
 import { Rng } from "./rng";
 import { popOf, totalPop } from "./state";
-import type { MonthReport, Realm, Region, Stratum, WarState, World } from "./state";
+import type { Realm, Region, Stratum, TurnReport, WarState, World } from "./state";
 
 /** 구간 이름: 위에서 아래로 북부, 중부, 남부 */
 export function sectorName(i: number): string {
@@ -163,19 +167,28 @@ const rivalRegion = (w: World): Region => regionOf(w, w.war!.rivalRegionId);
 
 export const soldiersOf = (r: Region): number => popOf(r, "soldier");
 
-/** 유효 병력: 굶는 군대는 약하다. 지난달 식량 부족률만큼 줄어든다. */
-export function effectiveSoldiers(r: Region, luck = 1): number {
-  return soldiersOf(r) * (1 - Math.min(1, Math.max(0, r.lastDeficit))) * luck;
+/** 지금 훈련 중인 병사 수 */
+export function trainingCount(r: Region, day: number): number {
+  return r.trainees.reduce((a, t) => a + (t.readyDay > day ? t.n : 0), 0);
+}
+
+/** 싸울 수 있는 병사: 훈련을 마친 병사만 센다 */
+export function readySoldiers(r: Region, day: number): number {
+  return Math.max(0, soldiersOf(r) - trainingCount(r, day));
+}
+
+/** 유효 병력: 훈련을 마친 병사 × (1 − 지난달 식량 부족률) × 전황 변수. 굶는 군대는 약하다. */
+export function effectiveSoldiers(r: Region, day: number, luck = 1): number {
+  return readySoldiers(r, day) * (1 - Math.min(1, Math.max(0, r.lastDeficit))) * luck;
 }
 
 /**
- * 전황 변수: 매달 각 세력의 전투력에 곱해지는 값. 지휘, 사기, 날씨, 정보의 우연을 한 숫자로 줄인 것이다.
- * 범위 ±LUCK_SPREAD. (시드, 달, 세력)만으로 정해져 재현된다. 플레이어는 이 달에 얼마인지 미리 알 수 없다.
+ * 전황 변수: 턴마다 각 세력의 전투력에 곱해지는 값. 지휘, 사기, 날씨, 정보의 우연을 한 숫자로 줄인 것이다.
+ * 범위 ±LUCK_SPREAD. (시드, 턴, 세력)만으로 정해져 재현된다. 플레이어는 이번 턴에 얼마인지 미리 알 수 없다.
  */
-export function monthLuck(w: World, realm: Realm): number {
+export function turnLuck(w: World, realm: Realm): number {
   if (w.war?.expected) return 1;
-  const month = Math.floor(w.day / 30);
-  const rng = Rng.fromParts(w.seed, 2, month, realm === "player" ? 1 : 2);
+  const rng = Rng.fromParts(w.seed, 2, turnOf(w.day).index, realm === "player" ? 1 : 2);
   return 1 + LUCK_SPREAD * (rng.next() * 2 - 1);
 }
 
@@ -202,7 +215,11 @@ export interface Pressure {
   force: number[];
 }
 
-export function computePressure(w: World): Pressure {
+/**
+ * 점마다 밀도와 압력을 구한다. `withLuck`이 참일 때만 이번 턴의 전황 변수를 곱한다.
+ * 화면에 보여 주는 값은 변수를 모르는 상태여야 하므로 기본값은 거짓이다.
+ */
+export function computePressure(w: World, withLuck = false): Pressure {
   const war = w.war!;
   const frontage = frontageKm(war.front);
   const wP = focusWeights(war.front, war.orders.player, "player");
@@ -211,8 +228,8 @@ export function computePressure(w: World): Pressure {
   // 따라서 가중치가 같으면 밀도는 어디서나 S / 전체 길이로 같고, 전선이 길어지면 밀도가 떨어진다.
   const sP = wP.reduce((a, w, i) => a + w * frontage[i]!, 0);
   const sR = wR.reduce((a, w, i) => a + w * frontage[i]!, 0);
-  const effP = effectiveSoldiers(playerRegion(w));
-  const effR = effectiveSoldiers(rivalRegion(w));
+  const effP = effectiveSoldiers(playerRegion(w), w.day, withLuck ? turnLuck(w, "player") : 1);
+  const effR = effectiveSoldiers(rivalRegion(w), w.day, withLuck ? turnLuck(w, "rival") : 1);
   const supP = supplyMultipliers(war.front, war.capitals.player.x);
   const supR = supplyMultipliers(war.front, war.capitals.rival.x);
   const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]!);
@@ -283,22 +300,39 @@ function ensureCohort(r: Region, stratum: Stratum) {
   return c;
 }
 
-/** 농민 n명을 병사로 징집한다. 잔류 농민은 그만큼 줄어 일손이 준다. */
-export function levyTroops(r: Region, n: number): number {
+/**
+ * 농민 n명을 병사로 징집한다. 농민은 곧바로 농사에서 빠지지만 병사는 LEVY_TRAINING_DAYS일 동안
+ * 훈련 중이라 싸우지 못한다(곡식은 먹는다). 잔류 농민은 그만큼 줄어 일손이 준다.
+ */
+export function levyTroops(r: Region, n: number, day: number): number {
   const farmers = ensureCohort(r, "farmer");
   const soldiers = ensureCohort(r, "soldier");
   const cap = (farmers.pop + soldiers.pop) * MAX_LEVY_SHARE_OF_FARMERS - soldiers.pop;
   const take = Math.max(0, Math.min(n, farmers.pop - 1, cap));
+  if (take <= 0) return 0;
   farmers.pop -= take;
   soldiers.pop += take;
+  r.trainees.push({ readyDay: day + LEVY_TRAINING_DAYS, n: take });
   return take;
 }
 
-/** 병사 n명을 해산해 농민으로 돌려보낸다. */
-export function disbandTroops(r: Region, n: number): number {
+/**
+ * 병사 n명을 해산해 농민으로 돌려보낸다. 훈련 중인 병사부터(가장 최근 징집분부터) 돌려보내므로,
+ * 방금 한 징집은 곧바로 취소할 수 있다.
+ */
+export function disbandTroops(r: Region, n: number, day: number): number {
   const farmers = ensureCohort(r, "farmer");
   const soldiers = ensureCohort(r, "soldier");
-  const give = Math.max(0, Math.min(n, soldiers.pop));
+  let remaining = Math.max(0, Math.min(n, soldiers.pop));
+  const give = remaining;
+  for (let i = r.trainees.length - 1; i >= 0 && remaining > 0; i--) {
+    const t = r.trainees[i]!;
+    if (t.readyDay <= day) continue;
+    const take = Math.min(t.n, remaining);
+    t.n -= take;
+    remaining -= take;
+  }
+  r.trainees = r.trainees.filter((t) => t.n > 1e-9 && t.readyDay > day);
   soldiers.pop -= give;
   farmers.pop += give;
   return give;
@@ -320,23 +354,25 @@ export function stepWarDay(w: World): void {
   const P = playerRegion(w);
   const R = rivalRegion(w);
 
-  const pr = computePressure(w);
+  P.trainees = P.trainees.filter((t) => t.readyDay > w.day);
+  R.trainees = R.trainees.filter((t) => t.readyDay > w.day);
+  const pr = computePressure(w, true);
   const moves = dailyMoves(w, pr);
   const areaBefore = playerAreaHa(war.front);
-  const effP = effectiveSoldiers(P, monthLuck(w, "player"));
-  const effR = effectiveSoldiers(R, monthLuck(w, "rival"));
+  const effP = effectiveSoldiers(P, w.day, turnLuck(w, "player"));
+  const effR = effectiveSoldiers(R, w.day, turnLuck(w, "rival"));
 
   for (let i = 0; i < war.front.length; i++) {
     war.front[i] = Math.min(MAP_W - 8, Math.max(8, war.front[i]! + moves[i]!));
   }
 
   // 사상: 란체스터 제곱법칙 형태. 상대 유효 병력에 비례한다.
-  const lossP = Math.min(soldiersOf(P), CASUALTY_RATE_PER_DAY * effR);
-  const lossR = Math.min(soldiersOf(R), CASUALTY_RATE_PER_DAY * effP);
+  const lossP = Math.min(readySoldiers(P, w.day), CASUALTY_RATE_PER_DAY * effR);
+  const lossR = Math.min(readySoldiers(R, w.day), CASUALTY_RATE_PER_DAY * effP);
   ensureCohort(P, "soldier").pop -= lossP;
   ensureCohort(R, "soldier").pop -= lossR;
-  war.monthStart.playerCasualties += lossP;
-  war.monthStart.rivalCasualties += lossR;
+  war.turnStart.playerCasualties += lossP;
+  war.turnStart.rivalCasualties += lossR;
 
   // 땅의 이동
   const areaAfter = playerAreaHa(war.front);
@@ -352,12 +388,12 @@ export function stepWarDay(w: World): void {
 }
 
 /* ------------------------------------------------------------------ */
-/* 월간 보고                                                           */
+/* 턴 보고                                                             */
 /* ------------------------------------------------------------------ */
 
-export function beginMonth(w: World): void {
+export function beginTurn(w: World): void {
   const war = w.war!;
-  war.monthStart = {
+  war.turnStart = {
     day: w.day,
     playerAreaHa: playerAreaHa(war.front),
     playerVillages: playerVillageCount(war.front),
@@ -366,12 +402,15 @@ export function beginMonth(w: World): void {
     front: [...war.front],
     playerCasualties: 0,
     rivalCasualties: 0,
+    pop: totalPop(playerRegion(w)),
   };
 }
 
-export function endMonth(w: World): MonthReport {
+export function endTurn(w: World): TurnReport {
   const war = w.war!;
-  const ms = war.monthStart;
+  const ms = war.turnStart;
+  const P = playerRegion(w);
+  const turn = turnOf(ms.day);
   let advI = -1, adv = 0, retI = -1, ret = 0;
   war.front.forEach((x, i) => {
     const d = x - ms.front[i]!;
@@ -384,12 +423,30 @@ export function endMonth(w: World): MonthReport {
       retI = i;
     }
   });
-  const report: MonthReport = {
+  // 이 턴에 파종일이나 수확일이 있었는가
+  const yearStart = turn.year * 360;
+  const sowDay = yearStart + SOWING_DAY_OF_YEAR;
+  const harvestDay = yearStart + HARVEST_DAY_OF_YEAR;
+  const sowIn = sowDay >= ms.day && sowDay < w.day;
+  const harvestIn = harvestDay >= ms.day && harvestDay < w.day;
+  const sowTerm = P.lastSowing?.terms.find((t) => t.label === "한계 요인");
+  const hv = P.lastHarvest;
+  const report: TurnReport = {
     day: w.day,
+    turnIndex: turn.index,
+    year: turn.year,
+    season: turn.season,
+    popStart: ms.pop,
+    popEnd: totalPop(P),
+    sowing: sowIn && P.lastSowing ? { sownHa: P.lastSowing.value, arableHa: P.arableHa, limit: sowTerm?.note ?? "" } : null,
+    harvest:
+      harvestIn && hv
+        ? { netKg: hv.value, weather: hv.terms.find((t) => t.label === "기상")?.value ?? 1, fraction: P.lastHarvestFraction ?? 1 }
+        : null,
     playerAreaHaDelta: playerAreaHa(war.front) - ms.playerAreaHa,
     villagesDelta: playerVillageCount(war.front) - ms.playerVillages,
     playerSoldiersStart: ms.playerSoldiers,
-    playerSoldiersEnd: soldiersOf(playerRegion(w)),
+    playerSoldiersEnd: soldiersOf(P),
     rivalSoldiersStart: ms.rivalSoldiers,
     rivalSoldiersEnd: soldiersOf(rivalRegion(w)),
     playerCasualties: ms.playerCasualties,
@@ -398,10 +455,10 @@ export function endMonth(w: World): MonthReport {
     bestAdvanceUnits: adv,
     worstRetreatPoint: retI,
     worstRetreatUnits: ret,
-    playerDeficit: playerRegion(w).lastDeficit,
+    playerDeficit: P.lastDeficit,
   };
   war.reports.push(report);
-  if (war.reports.length > 36) war.reports.shift();
+  if (war.reports.length > 40) war.reports.shift();
   return report;
 }
 
@@ -410,31 +467,32 @@ export function endMonth(w: World): MonthReport {
 /* ------------------------------------------------------------------ */
 
 /**
- * 매달 초에 적이 하는 일:
- * 1. 병력 조정: 기본은 인구의 levyShare(수확 철에는 harvestLevyShare)이고, 우리 병력을 보고 평시 90%,
- *    수확 철(수확 25일 전 ~ 5일 후) 50%까지는 따라 징집한다. 수확 철에 일손이 필요해 병력을 줄인다는 것이
- *    플레이어가 노릴 수 있는 약점이다.
+ * 매 턴 초에 적이 하는 일 (플레이어와 같은 주기로 결정한다):
+ * 1. 병력 조정: 기본은 인구의 levyShare(수확이 있는 턴에는 harvestLevyShare)이고, 우리 병력을 보고
+ *    평시 90%, 수확 턴 50%까지는 따라 징집한다(훈련 기간 때문에 즉시 전력이 되지는 않는다).
+ *    수확 턴에 일손이 필요해 병력을 줄인다는 것이 플레이어가 노릴 수 있는 약점이다.
  * 2. 명령선: 공세 시작일 이후, 자기 쪽 국지 우위가 가장 큰 곳을 중심으로 명령선을 앞으로 내민다.
- *    그 외에는 현재 전선을 지킨다. 내미는 깊이는 aggression에 비례한다.
+ *    우리가 병력을 몰아 둔 곳(명령선을 내민 곳)에는 맞서 병력을 모은다.
  */
 export function aiPlan(w: World): void {
   const war = w.war!;
   const R = rivalRegion(w);
-  const { dayOfYear } = dateOf(w.day);
-  const inHarvest = dayOfYear >= HARVEST_DAY_OF_YEAR - 25 && dayOfYear <= HARVEST_DAY_OF_YEAR + 5;
-  // 적은 우리 병력을 보고 따라 징집한다(평시 90%, 수확 철 50%). 군비 경쟁은 양쪽 경제를 갉아먹는다.
+  const turn = turnOf(w.day);
+  const harvestDay = turn.year * 360 + HARVEST_DAY_OF_YEAR;
+  const harvestTurn = harvestDay >= turn.startDay && harvestDay < turn.endDay;
+  // 적은 우리 병력을 보고 따라 징집한다. 군비 경쟁은 양쪽 경제를 갉아먹는다.
   const threat = soldiersOf(playerRegion(w));
-  const base = (inHarvest ? war.ai.harvestLevyShare : war.ai.levyShare) * totalPop(R);
-  const target = Math.round(Math.max(base, (inHarvest ? 0.5 : 0.9) * threat));
+  const base = (harvestTurn ? war.ai.harvestLevyShare : war.ai.levyShare) * totalPop(R);
+  const target = Math.round(Math.max(base, (harvestTurn ? 0.6 : 1.05) * threat));
   const cur = soldiersOf(R);
-  const cap = 0.08 * popOf(R, "farmer"); // 한 달에 바꿀 수 있는 규모
-  if (target > cur) levyTroops(R, Math.min(target - cur, cap));
-  else if (target < cur) disbandTroops(R, Math.min(cur - target, cap));
+  const cap = AI_MAX_LEVY_SHARE_PER_TURN * popOf(R, "farmer"); // 한 턴에 바꿀 수 있는 규모
+  if (target > cur) levyTroops(R, Math.min(target - cur, cap), w.day);
+  else if (target < cur) disbandTroops(R, Math.min(cur - target, cap), w.day);
 
   const x = war.front;
   // 방어: 우리가 명령선을 앞으로 내민 곳(= 병력을 몰아 둔 곳)에 적도 병력을 몰아 맞선다.
   // (적이 우리 집중 지점을 본다고 가정한다. 척후가 있는 전근대 군대로서 무리한 가정은 아니다.)
-  const defense = x.map((xi, i) => Math.min(80, 0.9 * Math.max(0, war.orders.player[i]! - xi)));
+  const defense = x.map((xi, i) => Math.min(AI_PUSH_DEPTH_UNITS, Math.max(0, war.orders.player[i]! - xi)));
   if (w.day < war.ai.startDay) {
     war.orders.rival = x.map((xi, i) => Math.max(8, xi - defense[i]!));
     return;
@@ -450,7 +508,7 @@ export function aiPlan(w: World): void {
       c = i;
     }
   }
-  const depth = war.ai.aggression * 70; // 한 달에 내미는 최대 깊이(지도 단위)
+  const depth = war.ai.aggression * AI_PUSH_DEPTH_UNITS; // 한 턴에 내미는 최대 깊이(지도 단위)
   war.orders.rival = x.map((xi, i) => {
     const g = Math.exp(-(((i - c) / 2.2) ** 2));
     return Math.max(8, xi - Math.max(depth * g, defense[i]!));
@@ -468,7 +526,7 @@ export function newWarState(playerRegionId: number, rivalRegionId: number): WarS
     result: null,
     ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02 },
     reports: [],
-    monthStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0 },
+    turnStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0, pop: 0 },
   };
 }
 

@@ -41,6 +41,8 @@ export interface ClearingProject {
 export interface Region extends RegionSeed {
   /** 올해 파종한 면적. 단위: ha */
   sownHa: number;
+  /** 훈련 중인 징집병. 이들은 병사 수에 포함되지만 readyDay 전에는 싸우지 못한다 */
+  trainees: { readyDay: number; n: number }[];
   clearing: ClearingProject | null;
   /** 이번 달 누적: 필요량, 실제 섭취량. 단위: kg */
   monthNeedKg: number;
@@ -135,10 +137,20 @@ export interface PendingEvent {
 
 export type Realm = "player" | "rival";
 
-export interface MonthReport {
-  /** 이 달 말의 절대 일수 */
+export interface TurnReport {
+  /** 이 턴 끝의 절대 일수 */
   day: number;
-  /** 지난 한 달 동안 */
+  /** 몇 번째 턴인가 (0부터) */
+  turnIndex: number;
+  year: number;
+  season: "봄" | "여름" | "가을" | "겨울";
+  popStart: number;
+  popEnd: number;
+  /** 이 턴에 파종이 있었다면 그 결과 */
+  sowing: { sownHa: number; arableHa: number; limit: string } | null;
+  /** 이 턴에 수확이 있었다면 그 결과 */
+  harvest: { netKg: number; weather: number; fraction: number } | null;
+  /** 이 턴 동안 */
   playerAreaHaDelta: number;
   /** 우리 쪽 마을 수의 변화 (양수 = 점령) */
   villagesDelta: number;
@@ -154,7 +166,7 @@ export interface MonthReport {
   /** 가장 크게 후퇴한 구간(점 번호)과 이동량(지도 단위, 양수). 후퇴가 없으면 -1, 0 */
   worstRetreatPoint: number;
   worstRetreatUnits: number;
-  /** 이 달의 식량 부족률 */
+  /** 턴 끝의 식량 부족률 */
   playerDeficit: number;
 }
 
@@ -170,9 +182,9 @@ export interface WarState {
   /** 예측용: 전황 변수를 평균(1.0)으로 고정한다 */
   expected?: boolean;
   ai: { aggression: number; startDay: number; levyShare: number; harvestLevyShare: number };
-  reports: MonthReport[];
-  /** 이번 달 진행 중 누적 */
-  monthStart: { day: number; playerAreaHa: number; playerVillages: number; playerSoldiers: number; rivalSoldiers: number; front: number[]; playerCasualties: number; rivalCasualties: number };
+  reports: TurnReport[];
+  /** 이번 턴 진행 중 누적 */
+  turnStart: { day: number; playerAreaHa: number; playerVillages: number; playerSoldiers: number; rivalSoldiers: number; front: number[]; playerCasualties: number; rivalCasualties: number; pop: number };
 }
 
 export interface World {

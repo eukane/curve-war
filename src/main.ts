@@ -1,20 +1,23 @@
 import { WAR_REGIONS } from "./data/start-regions";
-import { HA_PER_FARMER, UNIT_KM } from "./sim/constants";
+import { TURN_DAYS, turnOf } from "./sim/calendar";
+import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
 import { EVENTS } from "./sim/events";
-import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa } from "./sim/war";
-import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewMonth, setOrder, step, totalPop } from "./sim/world";
-import type { MonthPreview, World } from "./sim/world";
+import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
+import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
+import type { TurnPreview, TurnReport, World } from "./sim/world";
 import { advise } from "./ui/advisor";
-import { $, buildClearPanel, clearBuilt, dateText, esc, fmt, initEconomyPanel, renderClearActive, renderSummary } from "./ui/economy-panel";
+import { $, buildClearPanel, clearBuilt, esc, fmt, initEconomyPanel, renderClearActive, renderSummary } from "./ui/economy-panel";
 import { createMap } from "./ui/map";
 import type { MapView } from "./ui/map";
+import { timersOf } from "./ui/timers";
 
 let seed = 20260101;
 let world: World;
 let selected: number | null = null;
 let busy = false;
+let skip = false;
 let auto = false;
-let preview: MonthPreview | null = null;
+let preview: TurnPreview | null = null;
 let map: MapView;
 let ecoOpen = false;
 
@@ -40,7 +43,7 @@ function newGame() {
 }
 
 function refreshPreview() {
-  preview = world.war?.result ? null : previewMonth(world);
+  preview = world.war?.result ? null : previewTurn(world);
 }
 
 /* ------------------------------------------------------------------ */
@@ -50,21 +53,63 @@ function renderTop() {
   const P = player();
   const R = rival();
   const war = world.war!;
-  $("date").textContent = dateText(world.day);
+  const t = turnOf(world.day);
+  document.documentElement.dataset.season = t.season;
+  $("date").textContent = `${t.year + 1}년차 ${t.season} · ${t.index + 1}번째 턴`;
   const stockDays = P.granaryKg / dailyNeedKg(P);
   const area = (playerAreaHa(war.front) / totalAreaHa()) * 100;
+  const training = trainingCount(P, world.day);
   const chips: string[] = [];
-  chips.push(`<span class="chip">병력 <b>${fmt(soldiersOf(P))}</b> <span class="mu">vs ${fmt(soldiersOf(R))}</span></span>`);
-  chips.push(`<span class="chip ${stockDays < 60 ? "warn" : ""}">식량 <b>${fmt(stockDays)}</b>일치</span>`);
+  chips.push(
+    `<span class="chip" title="우리 병력 vs 적 병력. 훈련 중인 병사 포함">병력 <b>${fmt(soldiersOf(P))}</b>${training > 0 ? ` <span class="mu">(훈련 ${fmt(training)})</span>` : ""} <span class="mu">vs ${fmt(soldiersOf(R))}</span></span>`,
+  );
+  chips.push(`<span class="chip ${stockDays < 60 ? "warn" : ""}" title="곡창 재고가 하루 소비량으로 며칠을 버티는가">식량 <b>${fmt(stockDays)}</b>일치</span>`);
   chips.push(`<span class="chip">인구 <b>${fmt(totalPop(P))}</b> <span class="mu">vs ${fmt(totalPop(R))}</span></span>`);
   chips.push(`<span class="chip">영토 <b>${fmt(area, 1)}%</b></span>`);
-  if (P.lastDeficit > 0.01) chips.push(`<span class="chip bad">굶는 중 <b>${fmt(P.lastDeficit * 100, 0)}%</b></span>`);
+  if (P.lastDeficit > 0.01) chips.push(`<span class="chip bad" title="지난 한 달 필요한 곡식 중 못 먹은 비율">굶는 중 <b>${fmt(P.lastDeficit * 100, 0)}%</b></span>`);
   $("chips").innerHTML = chips.join("");
+}
+
+/** 한 해의 4계절을 한 줄로 보여주고, 지금 어디쯤인지와 파종·수확 시점을 표시한다. */
+function renderTimeline() {
+  const t = turnOf(world.day);
+  const seasons = ["봄", "여름", "가을", "겨울"];
+  const cells = seasons
+    .map((s, i) => {
+      const cls = i === t.seasonIndex ? "now" : i < t.seasonIndex ? "done" : "";
+      return `<div class="tl-s ${cls}"><span>${s}</span><span class="mono">${i * 90 + 1}~${(i + 1) * 90}일</span></div>`;
+    })
+    .join("");
+  const yearDay = world.day - t.year * 360;
+  const pct = (d: number) => `${(d / 360) * 100}%`;
+  $("timeline").innerHTML = `<div class="tl-seasons">${cells}</div>
+    <div class="tl-now" style="left:${pct(yearDay)}" title="지금 ${yearDay + 1}일째"></div>
+    <div class="tl-mark" style="left:${pct(SOWING_DAY_OF_YEAR)}">파종</div>
+    <div class="tl-mark" style="left:${pct(HARVEST_DAY_OF_YEAR)}">수확</div>`;
 }
 
 function renderAdvice() {
   $("advice").innerHTML = advise(world, preview)
     .map((a) => `<li class="${a.level}"><b>${esc(a.title)}</b><span>${esc(a.text)}</span></li>`)
+    .join("");
+}
+
+function renderTimers() {
+  const t = turnOf(world.day);
+  const list = timersOf(world, preview, 2);
+  const el = $("timers");
+  if (list.length === 0) {
+    el.innerHTML = `<li><span class="mu">지금 예정된 일은 없습니다.</span></li>`;
+    return;
+  }
+  el.innerHTML = list
+    .map((x) => {
+      const d = x.day - world.day;
+      const inThis = x.day < t.endDay;
+      const when = d <= 0 ? "지금" : `D+${d}`;
+      const sub = inThis ? "이번 계절" : "다음 계절";
+      return `<li class="${x.level ? `t-${x.level}` : ""} ${inThis ? "" : "next-turn"}"><span class="when"><b>${when}</b>${sub}</span><span class="what"><b>${esc(x.title)}</b><span>${esc(x.detail)}</span></span></li>`;
+    })
     .join("");
 }
 
@@ -90,7 +135,7 @@ function renderSector() {
       <dt>차이</dt><dd class="${net > 1 ? "good" : net < -1 ? "bad" : ""}">${net > 0 ? "+" : ""}${fmt(net, 1)} 명/km</dd>
       <dt>보급 배율</dt><dd>우리 ${fmt(supP, 2)} · 적 ${fmt(supR, 2)}</dd>
       <dt>명령선</dt><dd>${Math.abs(ahead) < 0.05 ? "현재 전선 유지" : `${ahead > 0 ? "앞으로" : "뒤로"} ${fmt(Math.abs(ahead), 1)}km`}</dd>
-      <dt>이번 달 예상</dt><dd class="${shiftKm > 0.05 ? "good" : shiftKm < -0.05 ? "bad" : ""}">${Math.abs(shiftKm) < 0.05 ? "움직임 없음" : `${shiftKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(shiftKm), 1)}km`}</dd>
+      <dt>이번 계절 예상</dt><dd class="${shiftKm > 0.05 ? "good" : shiftKm < -0.05 ? "bad" : ""}">${Math.abs(shiftKm) < 0.05 ? "움직임 없음" : `${shiftKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(shiftKm), 1)}km`}</dd>
     </dl>
     <div class="row" style="margin-top:8px">
       <button id="sec-back">← 뒤로 12</button><button id="sec-fwd">앞으로 12 →</button><button id="sec-clear">명령 취소</button>
@@ -108,11 +153,12 @@ function renderArmy() {
   const P = player();
   const farmers = popOf(P, "farmer");
   const sold = soldiersOf(P);
+  const training = trainingCount(P, world.day);
   const need = P.arableHa / HA_PER_FARMER;
   const gap = need - fieldFarmersAt(P, world.day);
   const cap = (farmers + sold) * 0.4;
   $("army").innerHTML = `<dl class="kv">
-      <dt>병력</dt><dd>${fmt(sold)}명</dd>
+      <dt>병력</dt><dd>${fmt(sold)}명${training > 0 ? ` <span class="mu">(훈련 중 ${fmt(training)})</span>` : ""}</dd>
       <dt>농민</dt><dd>${fmt(farmers)}명</dd>
       <dt>농사에 필요한 일손</dt><dd>${fmt(need)}명</dd>
       <dt>일손</dt><dd class="${gap > 0.5 ? "warn" : "good"}">${gap > 0.5 ? `${fmt(gap)}명 부족` : `${fmt(Math.max(0, -gap))}명 여유`}</dd>
@@ -122,7 +168,7 @@ function renderArmy() {
       <button data-lv="500">+500 징집</button><button data-lv="1000">+1,000 징집</button>
       <button data-lv="-500">−500 해산</button><button data-lv="-1000">−1,000 해산</button>
     </div>
-    <p class="note" id="army-note" style="margin:6px 0 0">병력은 농사를 짓지 못하지만 곡식은 똑같이 먹습니다. 일손이 모자라면 수확이 그만큼 줄고, 굶으면 병사도 약해집니다. 적은 우리 병력을 보고 따라 징집합니다.</p>`;
+    <p class="note" id="army-note" style="margin:6px 0 0">징집한 농민은 곧바로 농사에서 빠지고 60일 훈련을 받습니다. 훈련 중에는 싸우지 못하고 곡식만 먹습니다. 해산하면 훈련 중인 병사부터 농민으로 돌아갑니다. 적은 우리 병력을 보고 따라 징집합니다.</p>`;
   $("army")
     .querySelectorAll<HTMLButtonElement>("button[data-lv]")
     .forEach((b) =>
@@ -145,37 +191,55 @@ function renderPreview() {
     el.innerHTML = `<span class="mu">예상을 계산하는 중…</span>`;
     return;
   }
+  const t = turnOf(world.day);
   const dHa = preview.playerAreaHaDelta;
   const dPct = (dHa / totalAreaHa()) * 100;
   const big = preview.shifts.reduce((m, v, i) => (Math.abs(v) > Math.abs(preview!.shifts[m]!) ? i : m), 0);
   const bigKm = preview.shifts[big]! * UNIT_KM;
-  const res = preview.result === "win" ? `<b class="good"> 이대로면 이번 달에 적 수도가 함락됩니다.</b>` : preview.result === "loss" ? `<b class="bad"> 이대로면 이번 달에 우리 수도가 함락됩니다.</b>` : "";
-  el.innerHTML = `<b>이번 달 예상</b> (적의 반응 포함, 전황 변수 ±12% 불확실)　
+  const res = preview.result === "win" ? `<b class="good"> 이대로면 이번 계절에 적 수도가 함락됩니다.</b>` : preview.result === "loss" ? `<b class="bad"> 이대로면 이번 계절에 우리 수도가 함락됩니다.</b>` : "";
+  el.innerHTML = `<b>${t.season} 예상</b> <span class="mu">(적의 반응 포함, 전황 변수 ±12% 불확실)</span>
     영토 <span class="${dHa > 1 ? "good" : dHa < -1 ? "bad" : ""}">${dHa >= 0 ? "+" : ""}${fmt(dHa)}ha (${dPct >= 0 ? "+" : ""}${fmt(dPct, 2)}%p)</span> ·
     우리 병력 ${fmt(soldiersOf(player()))}→${fmt(preview.playerSoldiers)} (전사 약 ${fmt(preview.playerCasualties)}) ·
     적 ${fmt(soldiersOf(rival()))}→${fmt(preview.rivalSoldiers)} (전사 약 ${fmt(preview.rivalCasualties)}) ·
     ${Math.abs(bigKm) < 0.05 ? "전선은 움직이지 않을 전망" : `가장 크게 움직이는 곳 ${sectorName(big)}: ${bigKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(bigKm), 1)}km`}${res}`;
 }
 
+function turnCardHtml(r: TurnReport): string {
+  const dPct = (r.playerAreaHaDelta / totalAreaHa()) * 100;
+  const adv = r.bestAdvanceUnits * UNIT_KM;
+  const ret = r.worstRetreatUnits * UNIT_KM;
+  const moves = [adv >= 0.1 ? `${sectorName(r.bestAdvancePoint)} 전진 ${fmt(adv, 1)}km` : "", ret >= 0.1 ? `${sectorName(r.worstRetreatPoint)} 후퇴 ${fmt(ret, 1)}km` : ""].filter(Boolean).join(", ");
+  const front =
+    Math.abs(r.playerAreaHaDelta) < 1 && !moves
+      ? "전선은 거의 움직이지 않았다."
+      : `영토 ${r.playerAreaHaDelta > 0 ? "+" : ""}${fmt(r.playerAreaHaDelta)}ha (${dPct > 0 ? "+" : ""}${fmt(dPct, 2)}%p).${moves ? ` ${moves}.` : ""}${r.villagesDelta !== 0 ? ` <b class="${r.villagesDelta > 0 ? "good" : "bad"}">마을 ${Math.abs(r.villagesDelta)}곳 ${r.villagesDelta > 0 ? "점령" : "상실"}.</b>` : ""}`;
+  const army = `우리 ${fmt(r.playerSoldiersStart)}→${fmt(r.playerSoldiersEnd)}명 (전사 ${fmt(r.playerCasualties)}), 적 ${fmt(r.rivalSoldiersStart)}→${fmt(r.rivalSoldiersEnd)}명 (전사 ${fmt(r.rivalCasualties)}).`;
+  const seasonal: string[] = [];
+  if (r.sowing) seasonal.push(`<b>파종</b> ${fmt(r.sowing.sownHa)}ha를 심었다 (경작지 ${fmt(r.sowing.arableHa)}ha). ${esc(r.sowing.limit)}.`);
+  if (r.harvest) {
+    const w = r.harvest.weather;
+    seasonal.push(
+      `<b>수확</b> 순수확 ${fmt(r.harvest.netKg / 1000)}t. 기상 ${fmt(w, 2)}배${w < 0.8 ? " <span class='bad'>(흉년)</span>" : w > 1.1 ? " <span class='good'>(풍년)</span>" : ""}, 일손이 모자라 못 거둔 비율 ${fmt((1 - r.harvest.fraction) * 100, 0)}%.`,
+    );
+  }
+  if (!r.sowing && !r.harvest) seasonal.push(r.season === "겨울" ? "겨울나기. 곡창의 곡식으로 다음 파종까지 버틴다." : "농사에는 이 계절에 큰 일이 없었다.");
+  const popD = r.popEnd - r.popStart;
+  const food = `인구 ${fmt(r.popStart)}→${fmt(r.popEnd)}명 (${popD >= 0 ? "+" : ""}${fmt(popD)}).${r.playerDeficit > 0.02 ? ` <span class="bad">식량 부족 ${fmt(r.playerDeficit * 100, 0)}%.</span>` : ""}`;
+  return `<div><h3>전선</h3><p>${front}</p></div><div><h3>병력</h3><p>${army}</p></div><div><h3>계절의 일</h3><p>${seasonal.join(" ")}</p></div><div><h3>인구와 식량</h3><p>${food}</p></div>`;
+}
+
 function renderReports() {
-  const rs = [...world.war!.reports].reverse().slice(0, 8);
-  $("reports").innerHTML = rs.length
-    ? rs
-        .map((r) => {
-          const dPct = (r.playerAreaHaDelta / totalAreaHa()) * 100;
-          const adv = r.bestAdvanceUnits * UNIT_KM;
-          const ret = r.worstRetreatUnits * UNIT_KM;
-          const moves = [adv >= 0.1 ? `${sectorName(r.bestAdvancePoint)} 전진 ${fmt(adv, 1)}km` : "", ret >= 0.1 ? `${sectorName(r.worstRetreatPoint)} 후퇴 ${fmt(ret, 1)}km` : ""].filter(Boolean).join(", ");
-          const parts = [
-            Math.abs(r.playerAreaHaDelta) < 1 && !moves ? "전선은 거의 움직이지 않았다." : `영토 ${r.playerAreaHaDelta > 0 ? "+" : ""}${fmt(r.playerAreaHaDelta)}ha(${dPct > 0 ? "+" : ""}${fmt(dPct, 2)}%p).${moves ? ` ${moves}.` : ""}`,
-            r.villagesDelta !== 0 ? `<b class="${r.villagesDelta > 0 ? "good" : "bad"}">마을 ${Math.abs(r.villagesDelta)}곳 ${r.villagesDelta > 0 ? "점령" : "상실"}.</b>` : "",
-            `전사: 우리 ${fmt(r.playerCasualties)}명, 적 ${fmt(r.rivalCasualties)}명.`,
-            r.playerDeficit > 0.02 ? `<span class="bad">식량 부족 ${fmt(r.playerDeficit * 100, 0)}%.</span>` : "",
-          ];
-          return `<li><time>${dateText(r.day - 1).replace(/ \(.*\)/, "")}</time><span>${parts.filter(Boolean).join(" ")}</span></li>`;
-        })
-        .join("")
-    : `<li class="empty"><span class="mu">아직 한 달도 지나지 않았습니다. 명령을 내리고 <b>다음 달 ▶</b>을 눌러 보세요.</span></li>`;
+  const rs = [...world.war!.reports].reverse();
+  const latest = rs[0];
+  $("turncard-title").textContent = latest ? `지난 계절 결과 — ${latest.year + 1}년차 ${latest.season}` : "지난 계절 결과";
+  $("turncard").innerHTML = latest ? turnCardHtml(latest) : `<p class="mu" style="grid-column:1/-1;margin:0">아직 한 계절도 지나지 않았습니다. 명령을 내리고 <b>진행 ▶</b>을 눌러 보세요.</p>`;
+  $("reports").innerHTML = rs
+    .slice(1, 9)
+    .map((r) => {
+      const dPct = (r.playerAreaHaDelta / totalAreaHa()) * 100;
+      return `<li><time>${r.year + 1}년차 ${r.season}</time><span>영토 ${r.playerAreaHaDelta > 0 ? "+" : ""}${fmt(dPct, 2)}%p${r.villagesDelta !== 0 ? ` · 마을 ${Math.abs(r.villagesDelta)}곳 ${r.villagesDelta > 0 ? "점령" : "상실"}` : ""} · 전사 우리 ${fmt(r.playerCasualties)} / 적 ${fmt(r.rivalCasualties)}${r.harvest ? ` · 수확 ${fmt(r.harvest.netKg / 1000)}t` : ""}</span></li>`;
+    })
+    .join("");
 }
 
 function renderResult() {
@@ -186,10 +250,10 @@ function renderResult() {
     return;
   }
   const win = war.result === "win";
-  const months = Math.round(world.day / 30);
+  const turns = Math.round(world.day / TURN_DAYS);
   ov.hidden = false;
   $("overlay-card").innerHTML = `<h2 class="${win ? "good" : "bad"}">${win ? "승리 — 적 수도 함락" : "패배 — 수도 함락"}</h2>
-    <p>${months}개월(${(months / 12).toFixed(1)}년) 만에 ${win ? "적의 수도를 함락했습니다" : "수도를 잃었습니다"}.</p>
+    <p>${turns}턴(${(turns / 4).toFixed(1)}년) 만에 ${win ? "적의 수도를 함락했습니다" : "수도를 잃었습니다"}.</p>
     <dl class="kv"><dt>영토</dt><dd>${fmt((playerAreaHa(war.front) / totalAreaHa()) * 100, 1)}%</dd>
       <dt>우리 병력</dt><dd>${fmt(soldiersOf(player()))}명</dd><dt>적 병력</dt><dd>${fmt(soldiersOf(rival()))}명</dd>
       <dt>우리 인구</dt><dd>${fmt(totalPop(player()))}명</dd><dt>누적 기아 사망</dt><dd>${fmt(player().starvationDeathsTotal)}명</dd></dl>
@@ -201,9 +265,22 @@ function renderResult() {
   };
 }
 
+function renderButtons() {
+  const t = turnOf(world.day);
+  const btn = $("btn-next") as HTMLButtonElement;
+  btn.disabled = !!world.war!.result;
+  btn.textContent = busy ? "건너뛰기 ⏭" : `${t.season} 진행 ▶`;
+  btn.title = busy ? "결과를 바로 보기 (Space)" : `이 명령으로 ${t.season} 90일을 진행합니다 (Space)`;
+  $("btn-auto").setAttribute("aria-pressed", String(auto));
+  ($("btn-reset-orders") as HTMLButtonElement).disabled = busy;
+  ($("btn-new") as HTMLButtonElement).disabled = busy;
+}
+
 function renderAll() {
   renderTop();
+  renderTimeline();
   renderAdvice();
+  renderTimers();
   renderSector();
   renderArmy();
   renderPreview();
@@ -216,13 +293,6 @@ function renderAll() {
     renderClearActive();
   }
   renderButtons();
-}
-
-function renderButtons() {
-  const btn = $("btn-next") as HTMLButtonElement;
-  btn.disabled = busy || !!world.war!.result;
-  btn.textContent = busy ? "진행 중…" : "다음 달 ▶";
-  $("btn-auto").setAttribute("aria-pressed", String(auto));
 }
 
 /* ------------------------------------------------------------------ */
@@ -241,23 +311,32 @@ function onOrdersChanged() {
   });
 }
 
-function nextMonth() {
-  if (busy || world.war!.result) return;
+/** 한 턴(계절)을 진행한다. 진행 중에 다시 누르면 결과를 바로 보여 준다. */
+function nextTurn() {
+  if (world.war!.result) return;
+  if (busy) {
+    skip = true;
+    return;
+  }
   busy = true;
+  skip = false;
   $("hint").hidden = true;
   preview = null;
+  const endDay = turnOf(world.day).endDay;
   renderButtons();
-  const startMonth = Math.floor(world.day / 30);
   const tick = () => {
-    const stepped = step(world, 1);
+    const remaining = endDay - world.day;
+    const stepped = step(world, skip ? remaining : Math.min(2, remaining));
     map.draw(selected, null);
     renderTop();
-    const done = Math.floor(world.day / 30) > startMonth || world.war!.result || stepped === 0;
+    renderTimeline();
+    const done = world.day >= endDay || world.war!.result || stepped === 0;
     if (!done) {
-      setTimeout(tick, 28);
+      setTimeout(tick, 22);
       return;
     }
     busy = false;
+    skip = false;
     refreshPreview();
     renderAll();
     if (auto && !world.war!.result) {
@@ -265,7 +344,7 @@ function nextMonth() {
       if (danger) {
         auto = false;
         renderAll();
-      } else setTimeout(nextMonth, 350);
+      } else setTimeout(nextTurn, 700);
     }
   };
   tick();
@@ -294,11 +373,18 @@ function init() {
       renderAll();
     }
   });
-  $("btn-next").addEventListener("click", nextMonth);
+  document.addEventListener("keydown", (ev) => {
+    const tag = (ev.target as HTMLElement).tagName;
+    if (ev.code === "Space" && tag !== "BUTTON" && tag !== "INPUT" && tag !== "SUMMARY") {
+      ev.preventDefault();
+      nextTurn();
+    }
+  });
+  $("btn-next").addEventListener("click", nextTurn);
   $("btn-auto").addEventListener("click", () => {
     auto = !auto;
     renderAll();
-    if (auto) nextMonth();
+    if (auto && !busy) nextTurn();
   });
   $("btn-reset-orders").addEventListener("click", () => {
     world.war!.orders.player = [...world.war!.front];

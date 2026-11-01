@@ -1,4 +1,4 @@
-import { DAYS_PER_MONTH, DAYS_PER_YEAR, dateOf } from "./calendar";
+import { DAYS_PER_MONTH, DAYS_PER_YEAR, TURN_DAYS, dateOf } from "./calendar";
 import {
   BAD_WEATHER,
   BIRTHS_PER_1000_YEAR,
@@ -8,6 +8,7 @@ import {
   GRAIN_KG_PER_PERSON_DAY,
   HARVEST_DAY_OF_YEAR,
   HA_PER_FARMER,
+  LEVY_TRAINING_DAYS,
   MAP_W,
   SEED_KG_PER_HA,
   SOIL_OF_CLEARED_LAND,
@@ -23,7 +24,7 @@ import { EVENTS } from "./events";
 import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
-import { aiPlan, beginMonth, disbandTroops, endMonth, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
+import { aiPlan, beginTurn, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
   clearingWorkersAt,
@@ -50,6 +51,7 @@ export function createWorld(seed: number, seeds: RegionSeed[], opts?: { war?: { 
       ...s,
       cohorts: s.cohorts.map((c) => ({ ...c })),
       sownHa: 0,
+      trainees: [],
       clearing: null,
       monthNeedKg: 0,
       monthEatenKg: 0,
@@ -62,7 +64,7 @@ export function createWorld(seed: number, seeds: RegionSeed[], opts?: { war?: { 
       lastDemography: null,
     })),
   };
-  if (w.war) beginMonth(w);
+  if (w.war) beginTurn(w);
   return w;
 }
 
@@ -230,16 +232,16 @@ export function levy(w: World, regionId: number, n: number): CommandResult {
   const r = w.regions.find((x) => x.id === regionId);
   if (!r) return { ok: false, reason: "없는 지역입니다." };
   if (!(n >= 1)) return { ok: false, reason: "징집은 1명 이상이어야 합니다." };
-  const took = levyTroops(r, n);
+  const took = levyTroops(r, n, w.day);
   if (took < 1) return { ok: false, reason: "더 징집할 수 없습니다(농민의 40%가 상한이고, 최소한의 농민은 남겨야 합니다)." };
-  addLog(w, r.id, "player", `농민 ${fmt(took)}명을 징집했다. 병력 ${fmt(soldiersOf(r))}명.`);
+  addLog(w, r.id, "player", `농민 ${fmt(took)}명을 징집했다(훈련 ${LEVY_TRAINING_DAYS}일). 병력 ${fmt(soldiersOf(r))}명.`);
   return { ok: true };
 }
 
 export function disband(w: World, regionId: number, n: number): CommandResult {
   const r = w.regions.find((x) => x.id === regionId);
   if (!r) return { ok: false, reason: "없는 지역입니다." };
-  const gave = disbandTroops(r, n);
+  const gave = disbandTroops(r, n, w.day);
   if (gave < 1) return { ok: false, reason: "해산할 병사가 없습니다." };
   addLog(w, r.id, "player", `병사 ${fmt(gave)}명을 해산해 농민으로 돌려보냈다. 병력 ${fmt(soldiersOf(r))}명.`);
   return { ok: true };
@@ -317,8 +319,8 @@ export function forecast(w: World, regionId: number, days: number, mutate?: (c: 
   return forecastSeries(w, regionId, [{ days, label: "" }], mutate, scenario)[0]!.metrics;
 }
 
-export interface MonthPreview {
-  /** 이번 달이 끝났을 때의 전선 */
+export interface TurnPreview {
+  /** 이번 턴이 끝났을 때의 전선 */
   front: number[];
   playerAreaHaDelta: number;
   playerSoldiers: number;
@@ -326,24 +328,24 @@ export interface MonthPreview {
   playerCasualties: number;
   rivalCasualties: number;
   result: "win" | "loss" | null;
-  /** 이번 달 안에 점마다 움직이는 양(지도 단위, 양수 = 적 쪽) */
+  /** 이번 턴 안에 점마다 움직이는 양(지도 단위, 양수 = 적 쪽) */
   shifts: number[];
-  /** 이번 달에 적이 정한 명령선 */
+  /** 이번 턴에 적이 정한 명령선 */
   rivalOrders: number[];
 }
 
 /**
- * 다음 달 경계(30일 배수)까지 모델을 복제해 돌린다. 전황 변수는 평균(1.0)으로 고정하므로
+ * 다음 턴 경계(90일 배수)까지 모델을 복제해 돌린다. 전황 변수는 평균(1.0)으로 고정하므로
  * 실제 결과는 이 예측에서 ±12% 정도의 전투력 차이만큼 달라질 수 있다. 적의 반응(징집, 명령선)은 그대로 반영된다.
  */
-export function previewMonth(w: World): MonthPreview | null {
+export function previewTurn(w: World): TurnPreview | null {
   if (!w.war) return null;
   const c = cloneWorld(w);
   c.eventsEnabled = false;
   c.pending = null;
   c.weatherOverride = () => 1.0;
   c.war!.expected = true;
-  const days = DAYS_PER_MONTH - (w.day % DAYS_PER_MONTH);
+  const days = TURN_DAYS - (w.day % TURN_DAYS);
   const before = [...w.war!.front];
   const startArea = playerAreaHa(w.war!.front);
   const P0 = soldiersOf(w.regions.find((r) => r.id === w.war!.playerRegionId)!);
@@ -471,8 +473,8 @@ export function stepDay(w: World): boolean {
   if (w.pending) return false;
   if (w.war?.result) return false;
   if (openPendingIfTriggered(w)) return false;
-  // 매달 초: 적이 병력과 명령선을 정한다
-  if (w.war && w.day % DAYS_PER_MONTH === 0) aiPlan(w);
+  // 매 턴 초: 적이 병력과 명령선을 정한다 (플레이어와 같은 주기)
+  if (w.war && w.day % TURN_DAYS === 0) aiPlan(w);
 
   const { year, dayOfYear } = dateOf(w.day);
 
@@ -500,13 +502,13 @@ export function stepDay(w: World): boolean {
 
   w.day += 1;
 
-  // 6) 매월 말 인구 변화와 월간 보고
+  // 6) 매월 말 인구 변화, 매 턴 끝 보고
   if (w.day % DAYS_PER_MONTH === 0) {
     for (const r of w.regions) applyMonthlyDemography(r);
-    if (w.war) {
-      endMonth(w);
-      beginMonth(w);
-    }
+  }
+  if (w.war && w.day % TURN_DAYS === 0) {
+    endTurn(w);
+    beginTurn(w);
   }
 
   settleDecisions(w);
