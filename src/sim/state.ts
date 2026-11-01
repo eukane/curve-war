@@ -1,4 +1,50 @@
 import type { Explained } from "./explain";
+import { GRAIN_KG_PER_PERSON_DAY, LEVY_TRAINING_DAYS, MAX_LEVY_SHARE_OF_FARMERS } from "./constants";
+import { turnOf } from "./calendar";
+
+/** 법령과 제도가 열어 주는 규칙. 기본값은 법령이 없을 때의 규칙이다. */
+export interface Rules {
+  /** 징집병이 전력이 되기까지 (일) */
+  trainingDays: number;
+  /** 징집 상한 (농민+병사 대비) */
+  levyCap: number;
+  /** 병사 1인의 식량 소비 배율 (민간 = 1) */
+  rationMult: number;
+  /** 훈련을 마친 병사 중 파종·수확 일손으로 치는 비율 */
+  soldierFieldLabor: number;
+  /** 들일 일손 배율 (병참 인력 등으로 줄어드는 경우) */
+  fieldLaborMult: number;
+  /** 계절별(봄·여름·가을·겨울) 병사 전투력 배율 */
+  seasonStrength: [number, number, number, number];
+  /** 보급 한계 거리 배율 */
+  supplyFalloffMult: number;
+  /** 우리가 적에게 입히는 사상 배율 */
+  inflictMult: number;
+  /** 식량 부족이 병사 전투력을 깎는 정도의 배율 (군량 우선 배급이면 낮아진다) */
+  hungerPenaltyMult: number;
+  /** 병사를 해산할 때 농민으로 돌아가는 비율 (나머지는 비농업 인구가 된다) */
+  disbandReturn: number;
+}
+
+export const defaultRules = (): Rules => ({
+  trainingDays: LEVY_TRAINING_DAYS,
+  levyCap: MAX_LEVY_SHARE_OF_FARMERS,
+  rationMult: 1,
+  soldierFieldLabor: 0,
+  fieldLaborMult: 1,
+  seasonStrength: [1, 1, 1, 1],
+  supplyFalloffMult: 1,
+  inflictMult: 1,
+  hungerPenaltyMult: 1,
+  disbandReturn: 1,
+});
+
+export interface EdictState {
+  /** 시행 중인 법령 id */
+  enacted: string[];
+  /** 연구 중인 법령 */
+  researching: { id: string; remaining: number } | null;
+}
 
 export type Stratum = "farmer" | "artisan" | "elite" | "soldier";
 
@@ -39,6 +85,8 @@ export interface ClearingProject {
 }
 
 export interface Region extends RegionSeed {
+  /** 법령으로 정해지는 규칙 (법령이 없으면 기본값) */
+  rules: Rules;
   /** 올해 파종한 면적. 단위: ha */
   sownHa: number;
   /** 훈련 중인 징집병. 이들은 병사 수에 포함되지만 readyDay 전에는 싸우지 못한다 */
@@ -181,6 +229,8 @@ export interface WarState {
   result: "win" | "loss" | null;
   /** 예측용: 전황 변수를 평균(1.0)으로 고정한다 */
   expected?: boolean;
+  /** 각 세력의 법령 */
+  edicts: Record<Realm, EdictState>;
   ai: {
     aggression: number;
     startDay: number;
@@ -192,6 +242,8 @@ export interface WarState {
     profile: string;
     /** 예측용 복제에서 이번 한 번은 계획을 건너뛴다 (후보를 이미 적용한 상태에서 시작하므로) */
     skipPlanOnce?: boolean;
+    /** 적이 법령을 연구하는가 (기본 참). 고정 규칙 AI의 균형 회귀 시험에서만 끈다 */
+    edicts?: boolean;
   };
   reports: TurnReport[];
   /** 이번 턴 진행 중 누적 */
@@ -233,12 +285,19 @@ export function clearingWorkersAt(r: Region, day: number): number {
 
 /** 어느 날 들에 나갈 수 있는 농민 수 */
 export function fieldFarmersAt(r: Region, day: number): number {
-  return Math.max(0, popOf(r, "farmer") - clearingWorkersAt(r, day));
+  const ready = Math.max(0, popOf(r, "soldier") - r.trainees.reduce((a, t) => a + (t.readyDay > day ? t.n : 0), 0));
+  const labor = popOf(r, "farmer") - clearingWorkersAt(r, day) + ready * r.rules.soldierFieldLabor;
+  return Math.max(0, labor * r.rules.fieldLaborMult);
 }
 
-import { GRAIN_KG_PER_PERSON_DAY } from "./constants";
+/** 이 날이 몇 번째 계절(0~3)인가 */
+export function seasonIndexOf(day: number): number {
+  return turnOf(day).seasonIndex;
+}
+
 
 /** 하루 곡물 필요량. 단위: kg */
 export function dailyNeedKg(r: Region): number {
-  return totalPop(r) * GRAIN_KG_PER_PERSON_DAY;
+  const soldiers = popOf(r, "soldier");
+  return (totalPop(r) - soldiers + soldiers * r.rules.rationMult) * GRAIN_KG_PER_PERSON_DAY;
 }

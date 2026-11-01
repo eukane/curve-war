@@ -5,11 +5,12 @@
 import { TURN_DAYS, turnOf } from "../sim/calendar";
 import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEED_KG_PER_HA, SOWING_DAY_OF_YEAR } from "../sim/constants";
 import { soldiersOf, trainingCount } from "../sim/war";
+import { edictOf } from "../sim/edicts";
 import { fieldFarmersAt } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
 
 export interface Timer {
-  kind: "sow" | "harvest" | "train" | "rival";
+  kind: "sow" | "harvest" | "train" | "rival" | "edict";
   /** 절대 일수 */
   day: number;
   title: string;
@@ -70,6 +71,12 @@ export function timersOf(w: World, preview: TurnPreview | null, horizonTurns = 2
       out.push({ kind: "train", day: g.readyDay, title: "훈련 마침", detail: `병사 ${fmt(g.n)}명이 전력이 됩니다. (그때까지는 곡식만 먹고 싸우지 못합니다)`, level: "good" });
     }
   }
+
+  // 법령
+  const mine = war.edicts.player.researching;
+  if (mine) out.push({ kind: "edict", day: w.day + mine.remaining, title: `법령 시행: ${edictOf(mine.id).name}`, detail: "연구가 끝나면 규칙이 바뀝니다.", level: "good" });
+  const theirs = war.edicts.rival.researching;
+  if (theirs) out.push({ kind: "edict", day: w.day + theirs.remaining, title: `적이 법령을 연구 중: ${edictOf(theirs.id).name}`, detail: "시행되면 적의 규칙이 바뀝니다." });
 
   // 적: 이번 턴 예상 병력 변화
   if (preview) {

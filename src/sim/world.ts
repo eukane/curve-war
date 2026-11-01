@@ -25,10 +25,12 @@ import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
 import { pickProfile, planAi } from "./ai";
+import { aiEdicts, tickEdicts } from "./edicts";
 import { aiPlan, beginTurn, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
   clearingWorkersAt,
+  defaultRules,
   dailyNeedKg,
   fieldFarmersAt,
   popOf,
@@ -41,12 +43,12 @@ export * from "./state";
 export function createWorld(
   seed: number,
   seeds: RegionSeed[],
-  opts?: { war?: { playerRegionId: number; rivalRegionId: number; ai?: { mode?: "scripted" | "search"; profile?: string } } },
+  opts?: { war?: { playerRegionId: number; rivalRegionId: number; ai?: { mode?: "scripted" | "search"; profile?: string; edicts?: boolean } } },
 ): World {
   const w: World = {
     seed,
     day: 0,
-    war: opts?.war ? newWarState(opts.war.playerRegionId, opts.war.rivalRegionId, { mode: opts.war.ai?.mode, profile: opts.war.ai?.profile ?? pickProfile(seed) }) : null,
+    war: opts?.war ? newWarState(opts.war.playerRegionId, opts.war.rivalRegionId, { mode: opts.war.ai?.mode, profile: opts.war.ai?.profile ?? pickProfile(seed), edicts: opts.war.ai?.edicts }) : null,
     log: [],
     decisions: [],
     pending: null,
@@ -56,6 +58,7 @@ export function createWorld(
       ...s,
       cohorts: s.cohorts.map((c) => ({ ...c })),
       sownHa: 0,
+      rules: defaultRules(),
       trainees: [],
       clearing: null,
       monthNeedKg: 0,
@@ -483,6 +486,7 @@ export function stepDay(w: World): boolean {
     if (w.war.ai.skipPlanOnce) w.war.ai.skipPlanOnce = false;
     else if (w.war.ai.mode === "search") planAi(w, { clone: cloneWorld, step });
     else aiPlan(w);
+    aiEdicts(w);
   }
 
   const { year, dayOfYear } = dateOf(w.day);
@@ -506,7 +510,8 @@ export function stepDay(w: World): boolean {
     r.monthEatenKg += eaten;
   }
 
-  // 5) 전쟁
+  // 5) 전쟁과 법령
+  tickEdicts(w);
   stepWarDay(w);
 
   w.day += 1;

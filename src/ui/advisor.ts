@@ -126,6 +126,12 @@ export function advise(w: World, preview: TurnPreview | null = null): Advice[] {
     });
   }
 
+  // 법령 슬롯이 비어 있는데 연구도 안 하고 있다
+  const ed = war.edicts.player;
+  if (!ed.researching && ed.enacted.length < 2) {
+    out.push({ level: "info", title: "법령 슬롯이 비어 있다", text: `법령은 시행까지 180일(2턴)이 걸립니다. 오른쪽 '법령' 카드에서 연구를 시작할 수 있습니다. 적은 이미 자기 법령을 정하고 있습니다.` });
+  }
+
   // 5) 목표
   out.push({
     level: "info",

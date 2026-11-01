@@ -22,6 +22,7 @@ import {
   MAP_W,
   MAX_LEVY_SHARE_OF_FARMERS,
   PRESSURE_SCALE_PER_KM,
+  SEASON_MOVE_MULT,
   SOWING_DAY_OF_YEAR,
   SUPPLY_FALLOFF_UNITS,
   SUPPLY_MIN,
@@ -31,7 +32,7 @@ import {
 } from "./constants";
 import { TURN_DAYS, dateOf, turnOf } from "./calendar";
 import { Rng } from "./rng";
-import { popOf, totalPop } from "./state";
+import { popOf, seasonIndexOf, totalPop } from "./state";
 import type { Realm, Region, Stratum, TurnReport, WarState, World } from "./state";
 
 /** 구간 이름: 위에서 아래로 북부, 중부, 남부 */
@@ -179,7 +180,7 @@ export function readySoldiers(r: Region, day: number): number {
 
 /** 유효 병력: 훈련을 마친 병사 × (1 − 지난달 식량 부족률) × 전황 변수. 굶는 군대는 약하다. */
 export function effectiveSoldiers(r: Region, day: number, luck = 1): number {
-  return readySoldiers(r, day) * (1 - Math.min(1, Math.max(0, r.lastDeficit))) * luck;
+  return readySoldiers(r, day) * (1 - Math.min(1, Math.max(0, r.lastDeficit * r.rules.hungerPenaltyMult))) * luck * r.rules.seasonStrength[seasonIndexOf(day)]!;
 }
 
 /**
@@ -201,8 +202,8 @@ export function focusWeights(front: number[], orders: number[], realm: Realm): n
 }
 
 /** 점마다 보급 배율. 자기 수도에서 멀수록 약하다. */
-export function supplyMultipliers(front: number[], capitalX: number): number[] {
-  return front.map((x) => Math.max(SUPPLY_MIN, 1 - Math.abs(x - capitalX) / SUPPLY_FALLOFF_UNITS));
+export function supplyMultipliers(front: number[], capitalX: number, falloffMult = 1): number[] {
+  return front.map((x) => Math.max(SUPPLY_MIN, 1 - Math.abs(x - capitalX) / (SUPPLY_FALLOFF_UNITS * falloffMult)));
 }
 
 export interface Pressure {
@@ -230,12 +231,12 @@ export function computePressure(w: World, withLuck = false): Pressure {
   const sR = wR.reduce((a, w, i) => a + w * frontage[i]!, 0);
   const effP = effectiveSoldiers(playerRegion(w), w.day, withLuck ? turnLuck(w, "player") : 1);
   const effR = effectiveSoldiers(rivalRegion(w), w.day, withLuck ? turnLuck(w, "rival") : 1);
-  const supP = supplyMultipliers(war.front, war.capitals.player.x);
-  const supR = supplyMultipliers(war.front, war.capitals.rival.x);
+  const supP = supplyMultipliers(war.front, war.capitals.player.x, playerRegion(w).rules.supplyFalloffMult);
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x, rivalRegion(w).rules.supplyFalloffMult);
   const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]!);
   const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]!);
   const net = playerDensity.map((d, i) => d - rivalDensity[i]!);
-  const vmaxUnits = V_MAX_KM_PER_DAY / UNIT_KM;
+  const vmaxUnits = (V_MAX_KM_PER_DAY / UNIT_KM) * SEASON_MOVE_MULT[seasonIndexOf(w.day)]!;
   const force = net.map((n) => vmaxUnits * Math.tanh(n / PRESSURE_SCALE_PER_KM));
   return { frontage, playerDensity, rivalDensity, net, force };
 }
@@ -307,12 +308,12 @@ function ensureCohort(r: Region, stratum: Stratum) {
 export function levyTroops(r: Region, n: number, day: number): number {
   const farmers = ensureCohort(r, "farmer");
   const soldiers = ensureCohort(r, "soldier");
-  const cap = (farmers.pop + soldiers.pop) * MAX_LEVY_SHARE_OF_FARMERS - soldiers.pop;
+  const cap = (farmers.pop + soldiers.pop) * r.rules.levyCap - soldiers.pop;
   const take = Math.max(0, Math.min(n, farmers.pop - 1, cap));
   if (take <= 0) return 0;
   farmers.pop -= take;
   soldiers.pop += take;
-  r.trainees.push({ readyDay: day + LEVY_TRAINING_DAYS, n: take });
+  r.trainees.push({ readyDay: day + r.rules.trainingDays, n: take });
   return take;
 }
 
@@ -334,7 +335,9 @@ export function disbandTroops(r: Region, n: number, day: number): number {
   }
   r.trainees = r.trainees.filter((t) => t.n > 1e-9 && t.readyDay > day);
   soldiers.pop -= give;
-  farmers.pop += give;
+  // 직업 군인(상비군제)은 해산해도 전부 농민으로 돌아가지 않는다. 나머지는 비농업 인구가 된다.
+  farmers.pop += give * r.rules.disbandReturn;
+  ensureCohort(r, "artisan").pop += give * (1 - r.rules.disbandReturn);
   return give;
 }
 
@@ -367,8 +370,8 @@ export function stepWarDay(w: World): void {
   }
 
   // 사상: 란체스터 제곱법칙 형태. 상대 유효 병력에 비례한다.
-  const lossP = Math.min(readySoldiers(P, w.day), CASUALTY_RATE_PER_DAY * effR);
-  const lossR = Math.min(readySoldiers(R, w.day), CASUALTY_RATE_PER_DAY * effP);
+  const lossP = Math.min(readySoldiers(P, w.day), CASUALTY_RATE_PER_DAY * effR * R.rules.inflictMult);
+  const lossR = Math.min(readySoldiers(R, w.day), CASUALTY_RATE_PER_DAY * effP * P.rules.inflictMult);
   ensureCohort(P, "soldier").pop -= lossP;
   ensureCohort(R, "soldier").pop -= lossR;
   war.turnStart.playerCasualties += lossP;
@@ -515,7 +518,7 @@ export function aiPlan(w: World): void {
   });
 }
 
-export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: { mode?: "scripted" | "search"; profile?: string }): WarState {
+export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: { mode?: "scripted" | "search"; profile?: string; edicts?: boolean }): WarState {
   const front = initialFront();
   return {
     front,
@@ -524,7 +527,8 @@ export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: 
     rivalRegionId,
     capitals: { player: { x: 90, y: 320 }, rival: { x: 910, y: 320 } },
     result: null,
-    ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02, mode: ai?.mode ?? "search", profile: ai?.profile ?? "aggressor" },
+    ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02, mode: ai?.mode ?? "search", profile: ai?.profile ?? "aggressor", edicts: ai?.edicts ?? true },
+    edicts: { player: { enacted: [], researching: null }, rival: { enacted: [], researching: null } },
     reports: [],
     turnStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0, pop: 0 },
   };

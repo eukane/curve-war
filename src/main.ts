@@ -1,12 +1,14 @@
 import { WAR_REGIONS } from "./data/start-regions";
 import { TURN_DAYS, turnOf } from "./sim/calendar";
-import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
+import { EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
+import { EDICTS, cancelEdictResearch, edictOf, repealEdict, startEdict } from "./sim/edicts";
 import { profileOf } from "./sim/ai";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
 import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
 import type { TurnPreview, TurnReport, World } from "./sim/world";
 import { advise } from "./ui/advisor";
+import { edictNumbers } from "./ui/edict-info";
 import { $, esc, fmt, initEconomyPanel, renderSummary } from "./ui/economy-panel";
 import { createMap } from "./ui/map";
 import type { MapView } from "./ui/map";
@@ -94,6 +96,74 @@ function renderTimeline() {
     <div class="tl-mark" style="left:${pct(HARVEST_DAY_OF_YEAR)}">수확</div>`;
 }
 
+/** 폐지 버튼을 한 번 누른 법령 id. 두 번째 누름에서 실제로 폐지한다 (되살리려면 180일이 걸리는 실수를 막는다) */
+let armedRepeal: string | null = null;
+let armedTimer: ReturnType<typeof setTimeout> | undefined;
+
+const SEASON_NOTE = [
+  "해빙기라 진창이 많아 전진이 느립니다.",
+  "원정의 계절입니다. 전진이 가장 빠릅니다.",
+  "수확기입니다. 병사를 농사에 돌릴 일손이 곧 식량입니다.",
+  "추위와 눈으로 전진이 크게 느려집니다. 정비의 계절입니다.",
+];
+function renderSeasonNote() {
+  const t = turnOf(world.day);
+  const m = SEASON_MOVE_MULT[t.seasonIndex]!;
+  $("season-note").innerHTML = `<b>${t.season}</b> · 전진 속도 ×${fmt(m, 1)} — ${SEASON_NOTE[t.seasonIndex]} <span class="mu">(배율은 임시값)</span>`;
+}
+
+function renderEdicts() {
+  const e = world.war!.edicts.player;
+  const el = $("edicts");
+  const slots: string[] = [];
+  for (let i = 0; i < EDICT_SLOTS; i++) {
+    const id = e.enacted[i];
+    slots.push(id ? `<span class="slot on">${esc(edictOf(id).name)} ✓</span>` : `<span class="slot empty">${e.researching && i === e.enacted.length ? "연구 중" : "빈 슬롯"}</span>`);
+  }
+  let html = `<div class="slots" aria-label="법령 슬롯">${slots.join("")}</div>`;
+  if (e.researching) {
+    const def = edictOf(e.researching.id);
+    const done = EDICT_RESEARCH_DAYS - e.researching.remaining;
+    html += `<div class="research"><b>${esc(def.name)}</b> 연구 중 — 시행까지 ${fmt(e.researching.remaining)}일 (D+${fmt(e.researching.remaining)})
+      <div class="meter" role="img" aria-label="진행 ${fmt((done / EDICT_RESEARCH_DAYS) * 100)}%"><i style="width:${(done / EDICT_RESEARCH_DAYS) * 100}%"></i></div>
+      <button id="ed-cancel">연구 취소</button></div>`;
+  }
+  const canStart = !e.researching && e.enacted.length < EDICT_SLOTS;
+  html += EDICTS.map((d) => {
+    const on = e.enacted.includes(d.id);
+    const researching = e.researching?.id === d.id;
+    const n = edictNumbers(world, d.id);
+    return `<div class="edict"><h3><span>${esc(d.name)} <span class="mu" style="font-weight:400">— ${esc(d.blurb)}</span></span>
+      ${on ? `<button data-repeal="${d.id}" class="${armedRepeal === d.id ? "danger" : ""}">${armedRepeal === d.id ? "정말 폐지? (되살리려면 180일)" : "폐지"}</button>` : researching ? `<span class="mu">연구 중</span>` : `<button data-start="${d.id}" ${canStart && !busy ? "" : "disabled"} title="${canStart ? `${EDICT_RESEARCH_DAYS}일 걸립니다` : e.researching ? "다른 법령을 연구 중입니다" : "슬롯이 가득 찼습니다. 하나를 폐지해야 합니다"}">연구 시작</button>`}</h3>
+      <ul>${d.gains.map((g) => `<li class="g">${esc(g)}</li>`).join("")}${d.costs.map((c) => `<li class="c">${esc(c)}</li>`).join("")}</ul>
+      <div class="num">${esc(n.gain)} ${esc(n.cost)}</div></div>`;
+  }).join("");
+  html += `<p class="note" style="margin:8px 0 0">연구는 ${EDICT_RESEARCH_DAYS}일(2턴) 걸리고 법령은 ${EDICT_SLOTS}개까지만 시행할 수 있습니다. 폐지한 법령을 되살리려면 다시 연구해야 합니다.</p>`;
+  el.innerHTML = html;
+  el.querySelectorAll<HTMLButtonElement>("button[data-start]").forEach((b) => b.addEventListener("click", () => { startEdict(world, "player", b.dataset.start!); onOrdersChanged(); }));
+  el.querySelectorAll<HTMLButtonElement>("button[data-repeal]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = b.dataset.repeal!;
+      if (armedRepeal !== id) {
+        armedRepeal = id;
+        if (armedTimer) clearTimeout(armedTimer);
+        armedTimer = setTimeout(() => {
+          armedRepeal = null;
+          renderEdicts();
+        }, 4000);
+        renderEdicts();
+        return;
+      }
+      armedRepeal = null;
+      if (armedTimer) clearTimeout(armedTimer);
+      repealEdict(world, "player", id);
+      onOrdersChanged();
+    }),
+  );
+  const c = document.getElementById("ed-cancel");
+  if (c) c.addEventListener("click", () => { cancelEdictResearch(world, "player"); onOrdersChanged(); });
+}
+
 function renderAdvice() {
   $("advice").innerHTML = advise(world, preview)
     .map((a) => `<li class="${a.level}"><b>${esc(a.title)}</b><span>${esc(a.text)}</span></li>`)
@@ -128,8 +198,8 @@ function renderSector() {
   const war = world.war!;
   const pr = computePressure(world);
   const i = selected;
-  const supP = supplyMultipliers(war.front, war.capitals.player.x)[i]!;
-  const supR = supplyMultipliers(war.front, war.capitals.rival.x)[i]!;
+  const supP = supplyMultipliers(war.front, war.capitals.player.x, player().rules.supplyFalloffMult)[i]!;
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x, rival().rules.supplyFalloffMult)[i]!;
   const net = pr.net[i]!;
   const shiftKm = preview ? preview.shifts[i]! * UNIT_KM : 0;
   const order = war.orders.player[i]!;
@@ -286,6 +356,8 @@ function renderButtons() {
 function renderAll() {
   renderTop();
   renderTimeline();
+  renderSeasonNote();
+  renderEdicts();
   renderAdvice();
   renderTimers();
   renderSector();

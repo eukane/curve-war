@@ -13,11 +13,13 @@ const maxTurns = Number(process.argv[5] ?? 24);
 /** 적 AI 설정: AI_MODE=scripted|search, AI_PROFILE=aggressor|cautious|opportunist (없으면 시드로 정함) */
 const aiMode = (process.env.AI_MODE as "scripted" | "search" | undefined) ?? "search";
 const aiProfile = process.env.AI_PROFILE;
+/** 플레이어가 처음부터 시행 중인 법령: PLAYER_EDICTS=fields,standing */
+const playerEdicts = (process.env.PLAYER_EDICTS ?? "").split(",").filter(Boolean);
 
 const load = (p: string) => import(pathToFileURL(join(dir, p)).href);
 
 async function main() {
-  const [world, war, data, cal] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts")]);
+  const [world, war, data, cal, edicts] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts"), load("sim/edicts.ts")]);
   const { createWorld, step, levy, disband, setOrder, startClearing, totalPop } = world;
   const { soldiersOf, readySoldiers, playerAreaHa, totalAreaHa } = war;
   const { dateOf } = cal;
@@ -66,11 +68,17 @@ async function main() {
     },
   };
 
+  const only = (process.env.POLICIES ?? "").split(",").filter(Boolean);
   const out: Record<string, Record<string, number[]>> = {};
   for (const [name, pol] of Object.entries(policies)) {
+    if (only.length && !only.includes(name)) continue;
     const m: Record<string, number[]> = { result: [], turns: [], area: [], starv: [], pop: [], soldiers: [], rivalSoldiers: [], stagnant: [], harvestT: [] };
     for (let s = 0; s < nSeeds; s++) {
       const w = createWorld(seed0 + s, data.WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2, ai: { mode: aiMode, profile: aiProfile } } });
+      if (playerEdicts.length) {
+        w.war.edicts.player.enacted = [...playerEdicts];
+        edicts.recomputeRules(w);
+      }
       let t = 0, stag = 0, last = playerAreaHa(w.war.front) / totalAreaHa();
       for (; t < maxTurns && !w.war.result; t++) {
         pol(w, t);

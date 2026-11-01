@@ -33,8 +33,8 @@ import {
 import { createWorld, disband, levy, popOf, previewTurn, setOrder, step, stepDay, totalPop } from "./world";
 import type { World } from "./world";
 
-/** 고정 규칙 AI(비교·회귀용). 탐색형은 ai.test.ts에서 따로 시험한다 */
-const newWar = (seed = 1): World => createWorld(seed, WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2, ai: { mode: "scripted" } } });
+/** 고정 규칙 AI(비교·회귀용, 법령 없음). 탐색형은 ai.test.ts, 법령은 edicts.test.ts에서 따로 시험한다 */
+const newWar = (seed = 1): World => createWorld(seed, WAR_REGIONS, { war: { playerRegionId: 1, rivalRegionId: 2, ai: { mode: "scripted", edicts: false } } });
 const P = (w: World) => w.regions[0]!;
 const R = (w: World) => w.regions[1]!;
 const flat = (w: World, x = 500) => {
@@ -478,7 +478,7 @@ describe("균형 점검 (측정으로 고정한 동작, 사람이 해 보기 전
     }
   });
 
-  it("적 병력을 보고 병력을 맞추고 적의 집중 지점에 맞대응하면 10년 동안 지지 않는다 (측정: 영토 45~54%)", () => {
+  it("적 병력을 보고 병력을 맞추고 적의 집중 지점에 맞대응하면 10년 동안 지지 않는다 (측정: 영토 33~46%)", () => {
     for (const seed of [1, 2]) {
       const w = newWar(seed);
       for (let t = 0; t < 40 && !w.war!.result; t++) {
@@ -491,7 +491,7 @@ describe("균형 점검 (측정으로 고정한 동작, 사람이 해 보기 전
         step(w, 90);
       }
       expect(w.war!.result).not.toBe("loss");
-      expect(playerAreaHa(w.war!.front) / totalAreaHa()).toBeGreaterThan(0.35);
+      expect(playerAreaHa(w.war!.front) / totalAreaHa()).toBeGreaterThan(0.28);
     }
   });
 

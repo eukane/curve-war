@@ -35,6 +35,7 @@
     button { font:inherit; padding:5px 12px; border:1px solid var(--line); background:var(--panel); color:var(--fg); border-radius:3px; cursor:pointer; }
     button:hover:not(:disabled) { border-color:var(--fg); }
     button:focus-visible, canvas:focus-visible, summary:focus-visible, input:focus-visible { outline:2px solid var(--a); outline-offset:2px; }
+    button.danger { border-color:var(--bad); color:var(--bad); font-weight:700; }
     button.primary { background:var(--a); border-color:var(--a); color:#fff; font-weight:700; padding:7px 18px; }
     button.primary:disabled { opacity:.5; cursor:not-allowed; }
     button[aria-pressed="true"] { background:var(--fg); color:var(--bg); border-color:var(--fg); }
@@ -71,6 +72,18 @@
     @media (max-width:760px) { .turncard { grid-template-columns:minmax(0,1fr); } }
     .turncard h3 { margin:0 0 2px; font-size:12px; color:var(--mu); font-weight:500; }
     .turncard p { margin:0; font-size:13.5px; }
+    .season-note { font-size:12px; color:var(--mu); margin:-14px 0 6px; padding-left:2px; }
+    .season-note b { color:var(--season); }
+    .slots { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+    .slot { border:1px solid var(--line); border-radius:3px; padding:3px 10px; font-size:12.5px; }
+    .slot.on { border-color:var(--good); color:var(--good); font-weight:700; }
+    .slot.empty { color:var(--mu); border-style:dashed; }
+    .edict { border:1px solid var(--line); border-radius:3px; padding:8px 10px; margin-top:8px; }
+    .edict h3 { margin:0; font-size:13px; display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
+    .edict ul { margin:4px 0 0; padding-left:16px; font-size:12.5px; }
+    .edict li.g::marker { color:var(--good); } .edict li.c::marker { color:var(--bad); }
+    .edict .num { font-size:12px; color:var(--mu); margin-top:4px; }
+    .research { border:1px solid var(--a); border-radius:3px; padding:6px 10px; margin-bottom:8px; font-size:13px; }
     .layout { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:12px; align-items:start; }
     @media (max-width: 980px) { .layout { grid-template-columns:minmax(0,1fr); } }
     section, details.box { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:11px 14px; min-width:0; }
@@ -87,7 +100,7 @@
       /* 폰·좁은 화면: 가장 중요한 참모의 보고를 지도 바로 아래로 올린다 */
       .layout { display:flex; flex-direction:column; gap:12px; }
       .maincol, .side { display:contents; }
-      .mapbox { order:1; } .sec-advice { order:2; } .under { order:3; } .sec-timers { order:4; }
+      .mapbox { order:1; } .sec-advice { order:2; } .under { order:3; } .sec-timers { order:4; } .sec-edicts { order:5; }
     }
     .adv { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
     .adv li { border-left:4px solid var(--line); padding:1px 0 1px 9px; }
@@ -142,6 +155,7 @@
       </div>
     </div>
     <div class="timeline" id="timeline"></div>
+    <div class="season-note" id="season-note"></div>
     <div class="hint" id="hint" hidden>
       <b>시작하는 법</b>
       <ol>
@@ -171,6 +185,7 @@
       <div class="side">
         <section class="sec-advice"><h2>참모의 보고</h2><ul class="adv" id="advice"></ul></section>
         <section class="sec-timers"><h2>이번 계절에 일어날 일</h2><ul class="timers" id="timers"></ul></section>
+        <section class="sec-edicts"><h2>법령</h2><div id="edicts"></div></section>
       </div>
     </div>
     <section><h2 id="turncard-title">지난 계절 결과</h2><div class="turncard" id="turncard"></div><ul class="reports" id="reports" style="margin-top:10px"></ul></section>
