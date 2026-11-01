@@ -11,17 +11,19 @@
  * - 본문의 숫자는 모두 그 순간의 상태에서 계산한다.
  */
 import {
-  HARVEST_ALERT_DAY_OF_YEAR,
   HARVEST_DAY_OF_YEAR,
   HA_PER_FARMER,
   SEED_KG_PER_HA,
-  SPRING_CHECK_DAY_OF_YEAR,
 } from "../constants";
 import { dateOf } from "../calendar";
 import { clearingWorkersAt, dailyNeedKg, fieldFarmersAt } from "../state";
 import type { EventDef, EventOption } from "../events";
 import type { Region, World } from "../state";
 
+
+/** 폐기한 이벤트 전용 점검일 (출시 게임에서는 쓰지 않으므로 상수 파일에서 이곳으로 옮겼다) */
+const SPRING_CHECK_DAY_OF_YEAR = 45;
+const HARVEST_ALERT_DAY_OF_YEAR = HARVEST_DAY_OF_YEAR - 15;
 
 const fmt = (v: number, d = 0) => v.toLocaleString("ko-KR", { maximumFractionDigits: d, minimumFractionDigits: d });
 const tons = (kg: number) => `${fmt(kg / 1000)}t`;

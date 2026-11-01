@@ -6,7 +6,7 @@ import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultiplier
 import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
 import type { TurnPreview, TurnReport, World } from "./sim/world";
 import { advise } from "./ui/advisor";
-import { $, buildClearPanel, clearBuilt, esc, fmt, initEconomyPanel, renderClearActive, renderSummary } from "./ui/economy-panel";
+import { $, esc, fmt, initEconomyPanel, renderSummary } from "./ui/economy-panel";
 import { createMap } from "./ui/map";
 import type { MapView } from "./ui/map";
 import { timersOf } from "./ui/timers";
@@ -287,11 +287,7 @@ function renderAll() {
   renderReports();
   renderResult();
   map.draw(selected, preview);
-  if (ecoOpen) {
-    if (!clearBuilt) buildClearPanel();
-    renderSummary();
-    renderClearActive();
-  }
+  if (ecoOpen) renderSummary();
   renderButtons();
 }
 

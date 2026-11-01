@@ -71,11 +71,7 @@ export const WEATHER_MAX = 1.35;
 /** 파종일. 단위: 연중 일차. 임시. 봄(0~89일)의 중간. */
 export const SOWING_DAY_OF_YEAR = 60;
 
-/** 파종 점검일(이벤트 발생 시점). 단위: 연중 일차. 임시. 파종 15일 전. */
-export const SPRING_CHECK_DAY_OF_YEAR = 45;
 
-/** 수확 직전 점검일(이벤트 발생 시점). 단위: 연중 일차. 임시. 수확 15일 전. */
-export const HARVEST_ALERT_DAY_OF_YEAR = HARVEST_DAY_OF_YEAR - 15;
 
 /** 개간(숲·황무지를 경작지로 만드는 일)에 드는 노동. 단위: 인·일/ha. 임시. **출처를 찾지 못했다.**
  *  확인한 것은 정성적 서술뿐이다: 개간은 노동집약적이고 오래 걸리는 일이며, 불을 놓아 덤불을 치우고
