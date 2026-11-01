@@ -1,6 +1,7 @@
 import { START_REGIONS } from "./data/start-regions";
 import { dateOf } from "./sim/calendar";
 import type { Explained } from "./sim/explain";
+import { GRAIN_KG_PER_PERSON_DAY } from "./sim/constants";
 import { createWorld, popOf, step, totalPop } from "./sim/world";
 
 const world = createWorld(20260101, START_REGIONS);
@@ -24,7 +25,7 @@ function explainedTable(e: Explained | null | undefined): string {
 function render() {
   const d = dateOf(world.day);
   $("date").textContent = `${d.year + 1}년 ${d.month}월 ${d.dayOfMonth}일 (${d.season}) — ${region.name}`;
-  const need = totalPop(region) * 0.6;
+  const need = totalPop(region) * GRAIN_KG_PER_PERSON_DAY;
   $("summary").innerHTML = `<table>
     <tr><td>인구</td><td class="n">${fmt(totalPop(region))} 명</td><td class="mu">농민 ${fmt(popOf(region, "farmer"))} · 장인·상인 ${fmt(popOf(region, "artisan"))} · 지배층 ${fmt(popOf(region, "elite"))}</td></tr>
     <tr><td>곡창 재고</td><td class="n">${fmt(region.granaryKg / 1000)} t</td><td class="mu">하루 소비 약 ${fmt(need / 1000, 1)} t → 남은 ${fmt(region.granaryKg / need, 0)}일치</td></tr>

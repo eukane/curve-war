@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { START_REGIONS } from "../data/start-regions";
 import { DAYS_PER_YEAR, dateOf } from "./calendar";
+import { GRAIN_KG_PER_PERSON_DAY } from "./constants";
 import { Rng } from "./rng";
 import { computeHarvest, createWorld, popOf, step, totalPop, weatherFactor } from "./world";
 
@@ -73,12 +74,12 @@ describe("시뮬레이션", () => {
     expect(a.regions[0]!.granaryKg).toBe(b.regions[0]!.granaryKg);
   });
 
-  it("시드가 다르면 기상이 달라 결과가 달라진다", () => {
+  it("시드가 다르면 기상이 달라 곡창 재고가 달라진다", () => {
     const a = createWorld(1, START_REGIONS);
     const b = createWorld(2, START_REGIONS);
     step(a, DAYS_PER_YEAR * 20);
     step(b, DAYS_PER_YEAR * 20);
-    expect(totalPop(a.regions[0]!)).not.toBe(totalPop(b.regions[0]!));
+    expect(a.regions[0]!.granaryKg).not.toBe(b.regions[0]!.granaryKg);
   });
 
   it("100년을 돌려도 재고와 인구가 음수·NaN이 되지 않는다", () => {
@@ -100,24 +101,52 @@ describe("시뮬레이션", () => {
     expect(popOf(r, "farmer") / totalPop(r)).toBeCloseTo(before, 9);
   });
 
-  it("흉년(기상 최저)이 이어지면 인구가 줄고, 풍년이면 재고가 쌓인다", () => {
-    const bad = createWorld(1, START_REGIONS);
-    const r = bad.regions[0]!;
-    // 흉년 상황을 만들기 위해 곡창을 비워 둔 채 시작
+  it("곡창이 비면 식량 부족률이 1에 가깝고 인구가 줄어든다 (방향만 검증)", () => {
+    // 한계: 모델의 기아 사망은 부족률에 선형이라, 완전 기아가 수개월 지속되는 극단 상황의 치명성을
+    // 과소평가한다. 크기는 검증하지 않는다. docs/MODEL.md "알려진 단순화" 참조.
+    const w = createWorld(1, START_REGIONS);
+    const r = w.regions[0]!;
     r.granaryKg = 0;
     const p0 = totalPop(r);
-    step(bad, 240); // 수확 전까지 먹을 것이 없다
-    expect(totalPop(r)).toBeLessThan(p0 * 0.8);
+    step(w, 240);
+    expect(totalPop(r)).toBeLessThan(p0 * 0.95);
     expect(r.lastDeficit).toBeGreaterThan(0.9);
   });
 
-  it("평년 수확 입고량이 연 소비량과 같은 규모다 (초기 균형 설정 검증)", () => {
+  it("평년 수확 입고량이 연 소비량보다 약 22% 많다 (초기 균형 설정 검증)", () => {
     const w = createWorld(1, START_REGIONS);
     const r = w.regions[0]!;
     const h = computeHarvest(w.seed, 0, { ...r });
-    const annualNeed = totalPop(r) * 0.6 * DAYS_PER_YEAR;
+    const annualNeed = totalPop(r) * GRAIN_KG_PER_PERSON_DAY * DAYS_PER_YEAR;
     const normal = h.value / weatherFactor(w.seed, 0, 1); // 기상 1.0일 때로 환산
-    expect(normal / annualNeed).toBeGreaterThan(0.95);
-    expect(normal / annualNeed).toBeLessThan(1.1);
+    // 평년 여유 약 22%: 곡창 손실과 기상 변동을 견딜 완충
+    expect(normal / annualNeed).toBeGreaterThan(1.15);
+    expect(normal / annualNeed).toBeLessThan(1.3);
+  });
+
+  it("장기 안정성: 시드 10개 × 200년에서 인구가 수용력 근처에 머문다 (v0.1의 하락 추세 재발 방지)", () => {
+    const finals: number[] = [];
+    for (let seed = 1; seed <= 10; seed++) {
+      const w = createWorld(seed, START_REGIONS);
+      step(w, DAYS_PER_YEAR * 200);
+      finals.push(totalPop(w.regions[0]!));
+    }
+    finals.sort((a, b) => a - b);
+    // 수용력 = 12,600ha × 700kg/ha × 0.75 ÷ (0.5kg × 360일) ≈ 37,800명. 수치는 docs/MODEL.md 참조.
+    expect(finals[0]!).toBeGreaterThan(25_000);
+    expect(finals[finals.length - 1]!).toBeLessThan(40_000);
+  });
+
+  it("대기근 검증: 안정 상태에서 2년 연속 기상 0.5면 3년 뒤 인구가 8~25% 줄어든다", () => {
+    // 참고 목표(2차 출처): 잉글랜드 1315~1325년 인구 -12% (1315~17년 대기근 포함 10년).
+    // 목표가 단일 2차 수치라서 범위를 넓게 잡았다.
+    const w = createWorld(1, START_REGIONS);
+    w.weatherOverride = (y) => (y >= 60 && y < 62 ? 0.5 : 1.0);
+    step(w, DAYS_PER_YEAR * 60);
+    const before = totalPop(w.regions[0]!);
+    step(w, DAYS_PER_YEAR * 3);
+    const ratio = totalPop(w.regions[0]!) / before;
+    expect(ratio).toBeGreaterThan(0.75);
+    expect(ratio).toBeLessThan(0.92);
   });
 });

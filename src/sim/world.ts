@@ -49,6 +49,8 @@ export interface Region extends RegionSeed {
 
 export interface World {
   seed: number;
+  /** 시험용: 기상을 고정한다. 없으면 시드에서 계산 */
+  weatherOverride?: (year: number, regionId: number) => number;
   /** 시작 후 경과 일수 */
   day: number;
   regions: Region[];
@@ -86,11 +88,16 @@ export function weatherFactor(seed: number, year: number, regionId: number): num
   return Math.min(WEATHER_MAX, Math.max(WEATHER_MIN, f));
 }
 
-export function computeHarvest(seed: number, year: number, r: Region): Explained {
+export function computeHarvest(
+  seed: number,
+  year: number,
+  r: Region,
+  override?: (year: number, regionId: number) => number,
+): Explained {
   const farmers = popOf(r, "farmer");
   const laborHa = farmers * HA_PER_FARMER;
   const cultivatedHa = Math.min(r.arableHa, laborHa);
-  const weather = weatherFactor(seed, year, r.id);
+  const weather = override ? override(year, r.id) : weatherFactor(seed, year, r.id);
   const grossKg = cultivatedHa * YIELD_KG_PER_HA * r.soil * weather;
   const netKg = grossKg * (1 - SEED_FRACTION);
   return {
@@ -125,7 +132,7 @@ export function stepDay(w: World): void {
 
     // 2) 수확
     if (dayOfYear === HARVEST_DAY_OF_YEAR) {
-      const h = computeHarvest(w.seed, year, r);
+      const h = computeHarvest(w.seed, year, r, w.weatherOverride);
       r.lastHarvest = h;
       r.granaryKg += h.value;
     }
