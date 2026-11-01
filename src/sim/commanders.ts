@@ -135,27 +135,41 @@ export function tickCommanders(w: World): void {
 }
 
 /**
- * 적의 배치 (규칙 기반, 턴 초): 놀고 있는 지휘관이 있으면 성향에 맞는 구간에 보낸다.
- * 공세형 = 적이 가장 앞선 구간(밀도 차가 적에게 가장 유리한 곳), 수성형 = 가장 밀리는 구간, 군수형 = 수도에서 가장 먼 구간.
- * 이미 배치된 지휘관은 옮기지 않는다 (경험을 쌓게 하는 단순한 규칙).
+ * 규칙 기반 배치(턴 초의 적 AI, 그리고 플레이어의 "자동 배치"): 놀고 있는 지휘관이 있으면 성향에 맞는 구간에 보낸다.
+ * 공세형 = 자기 쪽이 가장 앞선 구간, 수성형 = 가장 밀리는 구간, 군수형 = 수도에서 가장 먼 구간.
+ * 이미 배치된 지휘관은 옮기지 않는다 (경험을 쌓게 하는 단순한 규칙). `instant`이면 이동 없이 바로 자리 잡는다(새 게임의 첫 배치).
  */
-export function aiCommanders(w: World, net: number[]): void {
+export function autoAssign(w: World, realm: Realm, net: number[], instant = false): void {
   const war = w.war!;
-  const zoneNet = COMMAND_ZONES.map(([a, b]) => net.slice(a, b + 1).reduce((s, v) => s + v, 0) / (b - a + 1));
+  // 부호를 맞춘다: 값이 클수록 이 세력이 앞선 구간
+  const lead = (i: number) => (realm === "player" ? net[i]! : -net[i]!);
+  const zoneLead = COMMAND_ZONES.map(([a, b]) => {
+    let t = 0;
+    for (let i = a; i <= b; i++) t += lead(i);
+    return t / (b - a + 1);
+  });
+  const capX = war.capitals[realm].x;
   for (const c of war.commanders) {
-    if (c.realm !== "rival" || c.zone !== null || c.toZone !== null) continue;
-    const free = COMMAND_ZONES.map((_, z) => z).filter((z) => !war.commanders.some((x) => x.realm === "rival" && (x.toZone ?? x.zone) === z));
+    if (c.realm !== realm || c.zone !== null || c.toZone !== null) continue;
+    const free = COMMAND_ZONES.map((_, z) => z).filter((z) => !war.commanders.some((x) => x.realm === realm && (x.toZone ?? x.zone) === z));
     if (free.length === 0) continue;
     const key = (z: number): number => {
-      // 가장 작은 키의 구간을 고른다. net은 플레이어 우세가 +이므로 적이 가장 앞선 곳 = 가장 작은 net
-      if (c.trait === "aggressive") return zoneNet[z]!;
-      if (c.trait === "defensive") return -zoneNet[z]!; // 적이 가장 밀리는 곳
+      // 가장 작은 키의 구간을 고른다
+      if (c.trait === "aggressive") return -zoneLead[z]!;
+      if (c.trait === "defensive") return zoneLead[z]!;
       const [a, b] = COMMAND_ZONES[z]!;
       let d = 0;
-      for (let i = a; i <= b; i++) d += war.capitals.rival.x - war.front[i]!;
-      return -d / (b - a + 1); // 수도에서 먼 구간일수록 키가 작다
+      for (let i = a; i <= b; i++) d += Math.abs(war.front[i]! - capX);
+      return -d / (b - a + 1);
     };
-    const best = free.sort((p, q) => key(p) - key(q))[0]!;
-    assignCommander(w, "rival", c.id, best);
+    const best = free.sort((p, q) => key(p) - key(q) || p - q)[0]!;
+    assignCommander(w, realm, c.id, best);
+    if (instant) {
+      c.zone = best;
+      c.toZone = null;
+    }
   }
 }
+
+/** 적의 배치 (턴 초) */
+export const aiCommanders = (w: World, net: number[]): void => autoAssign(w, "rival", net);

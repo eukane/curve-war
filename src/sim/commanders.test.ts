@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { WAR_REGIONS } from "../data/start-regions";
 import { COMMANDER_DAYS_PER_LEVEL, COMMANDER_TRAVEL_DAYS, COMMAND_ZONES, FRONT_POINTS } from "./constants";
-import { aiCommanders, assignCommander, commanderAt, commanderDensityMultipliers, commanderSupplyMultipliers, effectOf, levelOf, tickCommanders } from "./commanders";
+import { aiCommanders, autoAssign, assignCommander, commanderAt, commanderDensityMultipliers, commanderSupplyMultipliers, effectOf, levelOf, tickCommanders } from "./commanders";
 import { computePressure } from "./war";
 import { createWorld, stepDay } from "./world";
 import type { World } from "./world";
@@ -150,5 +150,27 @@ describe("지휘관: 적", () => {
     expect(a).toBe(run());
     expect(JSON.parse(a).filter((c: { realm: string; zone: number | null }) => c.realm === "rival" && c.zone !== null).length).toBe(3);
     void COMMAND_ZONES;
+  });
+});
+
+describe("지휘관: 플레이어 자동 배치(위임)", () => {
+  it("instant면 이동 없이 바로 자리 잡고, 성향에 맞는 구간을 고른다 (우리가 앞선 구간 = 공세형, 밀리는 구간 = 수성형)", () => {
+    const w = newWar();
+    flat(w);
+    const net = Array(FRONT_POINTS).fill(0);
+    for (let i = 6; i <= 10; i++) net[i] = 20; // 중부에서 우리가 앞선다
+    for (let i = 11; i <= 16; i++) net[i] = -20; // 남부에서 밀린다
+    autoAssign(w, "player", net, true);
+    const c = (id: number) => w.war!.commanders.find((x) => x.id === id)!;
+    expect(c(SEO).zone).toBe(1);
+    expect(c(HAN).zone).toBe(2);
+    expect(c(DOHA).zone).toBe(0);
+    expect(w.war!.commanders.filter((x) => x.realm === "player").every((x) => x.toZone === null)).toBe(true);
+  });
+  it("instant가 아니면 이동 시간이 든다", () => {
+    const w = newWar();
+    flat(w);
+    autoAssign(w, "player", Array(FRONT_POINTS).fill(0));
+    expect(w.war!.commanders.filter((x) => x.realm === "player").every((x) => x.zone === null && x.toZone !== null)).toBe(true);
   });
 });

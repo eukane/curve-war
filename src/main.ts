@@ -3,7 +3,7 @@ import { TURN_DAYS, turnOf } from "./sim/calendar";
 import { FORT_DENSITY_BONUS, FORT_OFFSET_UNITS, EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
 import { EDICTS, cancelEdictResearch, edictOf, repealEdict, startEdict } from "./sim/edicts";
 import { profileOf } from "./sim/ai";
-import { TRAIT_NAME, TRAIT_TEXT, ZONE_NAME, assignCommander, effectOf, levelOf } from "./sim/commanders";
+import { autoAssign, TRAIT_NAME, TRAIT_TEXT, ZONE_NAME, assignCommander, effectOf, levelOf } from "./sim/commanders";
 import { COMMANDER_DAYS_PER_LEVEL, COMMANDER_MAX_LEVEL, COMMANDER_TRAVEL_DAYS } from "./sim/constants";
 import { KIND_NAME, buildInfo, canBuild, cancelBuild, fortMultipliers, roadFalloffMultipliers, startBuild } from "./sim/structures";
 import { EVENTS } from "./sim/events";
@@ -44,6 +44,8 @@ function newGame() {
   selected = null;
   busy = false;
   auto = false;
+  // 위임: 새 게임에서는 지휘관이 이미 성향에 맞는 구간에 배치되어 있다. 플레이어는 카드에서 바꿀 수 있다.
+  autoAssign(world, "player", computePressure(world).net, true);
   initEconomyPanel(world, PLAYER, () => renderAll());
   $("overlay").hidden = true;
   $("hint").hidden = false;
@@ -315,6 +317,11 @@ function renderCommanders() {
         <div class="row">${btns}${here !== null ? `<button data-cmd="${c.id}" data-zone="-1">대기</button>` : ""}</div></div>`;
     })
     .join("")}</div>`;
+  el.insertAdjacentHTML("beforeend", `<div class="row" style="margin-top:8px"><button id="cmd-auto" ${list.some((c) => c.zone === null && c.toZone === null) ? "" : "disabled"} title="놀고 있는 지휘관을 성향에 맞는 구간에 보냅니다 (이동 ${COMMANDER_TRAVEL_DAYS}일)">놀고 있는 지휘관 자동 배치</button><span class="mu">공세형은 우리가 앞선 구간, 수성형은 밀리는 구간, 군수형은 수도에서 먼 구간에 보냅니다.</span></div>`);
+  document.getElementById("cmd-auto")!.onclick = () => {
+    autoAssign(world, "player", computePressure(world).net);
+    onOrdersChanged();
+  };
   el.querySelectorAll<HTMLButtonElement>("button[data-cmd]").forEach((b) => b.addEventListener("click", () => {
     const z = Number(b.dataset.zone);
     assignCommander(world, "player", Number(b.dataset.cmd), z < 0 ? null : z);
