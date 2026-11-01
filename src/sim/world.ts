@@ -2,11 +2,14 @@ import { DAYS_PER_MONTH, DAYS_PER_YEAR, dateOf } from "./calendar";
 import {
   BIRTHS_PER_1000_YEAR,
   BIRTH_SUPPRESSION_PER_DEFICIT,
+  CLEARING_LABOR_DAYS_PER_HA,
   DEATHS_PER_1000_YEAR,
   GRAIN_KG_PER_PERSON_DAY,
   HARVEST_DAY_OF_YEAR,
   HA_PER_FARMER,
-  SEED_FRACTION,
+  SEED_KG_PER_HA,
+  SOIL_OF_CLEARED_LAND,
+  SOWING_DAY_OF_YEAR,
   STARVATION_DEATH_RATE_AT_FULL_DEFICIT,
   STORAGE_LOSS_PER_DAY,
   WEATHER_MAX,
@@ -14,67 +17,43 @@ import {
   WEATHER_SIGMA,
   YIELD_KG_PER_HA,
 } from "./constants";
+import { EVENTS } from "./events";
+import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
+import {
+  clearingWorkersAt,
+  dailyNeedKg,
+  fieldFarmersAt,
+  popOf,
+  totalPop,
+} from "./state";
+import type { Checkpoint, Decision, Metrics, PendingEvent, Region, RegionSeed, World } from "./state";
 
-export type Stratum = "farmer" | "artisan" | "elite";
-
-export interface Cohort {
-  stratum: Stratum;
-  /** 단위: 명 (소수로 보관하고 표시할 때만 반올림) */
-  pop: number;
-}
-
-export interface RegionSeed {
-  id: number;
-  name: string;
-  /** 경작 가능한 토지. 단위: ha */
-  arableHa: number;
-  /** 지력 계수. 단위: 무차원 (1.0 = 평균) */
-  soil: number;
-  /** 시작 시점 곡창 재고. 단위: kg */
-  granaryKg: number;
-  cohorts: Cohort[];
-}
-
-export interface Region extends RegionSeed {
-  /** 이번 달 누적: 필요량, 실제 섭취량. 단위: kg */
-  monthNeedKg: number;
-  monthEatenKg: number;
-  /** 지난달 식량 부족률(0~1). 첫 달에는 0 */
-  lastDeficit: number;
-  lastHarvest: Explained | null;
-  lastDemography: { births: Explained; deaths: Explained } | null;
-}
-
-export interface World {
-  seed: number;
-  /** 시험용: 기상을 고정한다. 없으면 시드에서 계산 */
-  weatherOverride?: (year: number, regionId: number) => number;
-  /** 시작 후 경과 일수 */
-  day: number;
-  regions: Region[];
-}
-
-export function totalPop(r: Region): number {
-  return r.cohorts.reduce((s, c) => s + c.pop, 0);
-}
-
-export function popOf(r: Region, stratum: Stratum): number {
-  return r.cohorts.filter((c) => c.stratum === stratum).reduce((s, c) => s + c.pop, 0);
-}
+export * from "./state";
 
 export function createWorld(seed: number, seeds: RegionSeed[]): World {
   return {
     seed,
     day: 0,
+    log: [],
+    decisions: [],
+    pending: null,
+    eventsEnabled: true,
+    firedKeys: [],
     regions: seeds.map((s) => ({
       ...s,
       cohorts: s.cohorts.map((c) => ({ ...c })),
+      sownHa: 0,
+      clearing: null,
       monthNeedKg: 0,
       monthEatenKg: 0,
       lastDeficit: 0,
+      starvationDeathsTotal: 0,
+      clearedTotalHa: 0,
+      lastSowing: null,
       lastHarvest: null,
+      lastHarvestFraction: null,
       lastDemography: null,
     })),
   };
@@ -88,57 +67,315 @@ export function weatherFactor(seed: number, year: number, regionId: number): num
   return Math.min(WEATHER_MAX, Math.max(WEATHER_MIN, f));
 }
 
-export function computeHarvest(
-  seed: number,
-  year: number,
-  r: Region,
-  override?: (year: number, regionId: number) => number,
-): Explained {
-  const farmers = popOf(r, "farmer");
-  const laborHa = farmers * HA_PER_FARMER;
-  const cultivatedHa = Math.min(r.arableHa, laborHa);
-  const weather = override ? override(year, r.id) : weatherFactor(seed, year, r.id);
-  const grossKg = cultivatedHa * YIELD_KG_PER_HA * r.soil * weather;
-  const netKg = grossKg * (1 - SEED_FRACTION);
+/**
+ * 토지 한계로 정해지는 지속 가능 인구(평년, 일손은 충분하다고 가정). 단위: 명
+ * `addClearedHa`를 주면 그만큼 더 개간한 뒤의 값을 돌려준다 (새 땅의 지력은 낮아 평균이 내려간다).
+ */
+export function carryingCapacity(r: Region, addClearedHa = 0): number {
+  const arable = r.arableHa + addClearedHa;
+  const soil = addClearedHa > 0 ? (r.soil * r.arableHa + SOIL_OF_CLEARED_LAND * addClearedHa) / arable : r.soil;
+  const netKgPerHa = YIELD_KG_PER_HA * soil - SEED_KG_PER_HA;
+  return (arable * netKgPerHa) / (GRAIN_KG_PER_PERSON_DAY * DAYS_PER_YEAR);
+}
+
+const fmt = (v: number, d = 0) => v.toLocaleString("ko-KR", { maximumFractionDigits: d, minimumFractionDigits: d });
+
+function addLog(w: World, regionId: number, kind: "event" | "player" | "system", text: string) {
+  w.log.push({ day: w.day, regionId, kind, text });
+}
+
+/* ------------------------------------------------------------------ */
+/* 파종                                                                */
+/* ------------------------------------------------------------------ */
+export function computeSowing(r: Region, day: number): Explained {
+  const field = fieldFarmersAt(r, day);
+  const laborHa = field * HA_PER_FARMER;
+  const seedHa = r.seedKg / SEED_KG_PER_HA;
+  const sown = Math.min(r.arableHa, laborHa, seedHa);
+  const limit =
+    sown === r.arableHa
+      ? "토지가 한계"
+      : sown === laborHa
+        ? "일손이 한계 (개간 인부나 징집으로 들에 나갈 사람이 모자람)"
+        : "종자가 한계 (종자가 모자라 다 심지 못함)";
   return {
-    label: `${year + 1}년 수확 (곡창 입고분)`,
-    value: netKg,
-    unit: "kg",
-    formula: "경작면적 × 평년 수확량 × 지력 × 기상 × (1 − 종자 비율)",
+    label: "올해 파종 면적",
+    value: sown,
+    unit: "ha",
+    formula: "min(경작지, 일손으로 심을 수 있는 면적, 종자로 심을 수 있는 면적)",
     terms: [
-      {
-        label: "경작면적",
-        value: cultivatedHa,
-        unit: "ha",
-        note: laborHa < r.arableHa
-          ? `일손이 모자라 경작 가능 토지 ${Math.round(r.arableHa)}ha 중 일부만 경작`
-          : `일손은 충분하고 토지 ${Math.round(r.arableHa)}ha가 한계`,
-      },
-      { label: "평년 수확량", value: YIELD_KG_PER_HA, unit: "kg/ha" },
-      { label: "지력", value: r.soil, unit: "배" },
-      { label: "기상", value: weather, unit: "배", note: "평년 = 1.0" },
-      { label: "종자 비율", value: SEED_FRACTION, unit: "비율", note: "다음 해 파종용으로 남김" },
+      { label: "경작지", value: r.arableHa, unit: "ha" },
+      { label: "일손으로 심을 수 있는 면적", value: laborHa, unit: "ha", note: `들에 나갈 농민 ${fmt(field)}명 × ${HA_PER_FARMER}ha` },
+      { label: "종자로 심을 수 있는 면적", value: seedHa, unit: "ha", note: `종자 ${fmt(r.seedKg / 1000)}t ÷ ${SEED_KG_PER_HA}kg/ha` },
+      { label: "한계 요인", value: 0, unit: "", note: limit },
     ],
   };
 }
 
-/** 하루를 진행한다. */
-export function stepDay(w: World): void {
+function sow(r: Region, day: number) {
+  const e = computeSowing(r, day);
+  r.lastSowing = e;
+  r.sownHa = e.value;
+  // 쓰고 남은 종자는 곡창으로 돌린다
+  const used = r.sownHa * SEED_KG_PER_HA;
+  r.granaryKg += Math.max(0, r.seedKg - used);
+  r.seedKg = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 수확                                                                */
+/* ------------------------------------------------------------------ */
+export function computeHarvest(
+  seed: number,
+  year: number,
+  r: Region,
+  day: number,
+  override?: (year: number, regionId: number) => number,
+): Explained & { grossKg: number; seedReserveKg: number; fraction: number } {
+  const field = fieldFarmersAt(r, day);
+  const capacityHa = field * HA_PER_FARMER;
+  const fraction = r.sownHa > 0 ? Math.min(1, capacityHa / r.sownHa) : 1;
+  const weather = override ? override(year, r.id) : weatherFactor(seed, year, r.id);
+  const grossKg = r.sownHa * YIELD_KG_PER_HA * r.soil * weather * fraction;
+  const seedReserveKg = Math.min(grossKg, SEED_KG_PER_HA * r.arableHa);
+  const toGranary = grossKg - seedReserveKg;
+  return {
+    label: `${year + 1}년 수확 (곡창 입고분)`,
+    value: toGranary,
+    unit: "kg",
+    formula: "파종 면적 × 평년 수확량 × 지력 × 기상 × 수확 완료율 − 내년 종자 보존분",
+    terms: [
+      { label: "파종 면적", value: r.sownHa, unit: "ha", note: "봄에 실제로 심은 면적" },
+      { label: "평년 수확량", value: YIELD_KG_PER_HA, unit: "kg/ha" },
+      { label: "지력", value: r.soil, unit: "배" },
+      { label: "기상", value: weather, unit: "배", note: "평년 = 1.0" },
+      {
+        label: "수확 완료율",
+        value: fraction,
+        unit: "비율",
+        note: fraction < 1 ? `들에 남은 일손 ${fmt(field)}명으로는 ${fmt(capacityHa)}ha만 거둘 수 있음` : "일손이 충분해 전부 거둠",
+      },
+      { label: "내년 종자 보존분", value: seedReserveKg, unit: "kg", note: `${SEED_KG_PER_HA}kg/ha × 경작지 ${fmt(r.arableHa)}ha` },
+    ],
+    grossKg,
+    seedReserveKg,
+    fraction,
+  };
+}
+
+function harvest(w: World, r: Region, year: number) {
+  const h = computeHarvest(w.seed, year, r, w.day, w.weatherOverride);
+  r.lastHarvest = { label: h.label, value: h.value, unit: h.unit, formula: h.formula, terms: h.terms };
+  r.lastHarvestFraction = h.fraction;
+  r.seedKg += h.seedReserveKg;
+  r.granaryKg += h.value;
+  // 파종 면적은 다음 파종 때까지 유지하지 않는다
+  r.sownHa = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 개간                                                                */
+/* ------------------------------------------------------------------ */
+function advanceClearing(w: World, r: Region) {
+  const c = r.clearing;
+  if (!c) return;
+  const workers = clearingWorkersAt(r, w.day);
+  const possible = workers / CLEARING_LABOR_DAYS_PER_HA;
+  const d = Math.min(possible, c.targetHa - c.progressHa, r.clearableHa);
+  if (d > 0) {
+    // 새 땅은 평균보다 지력이 낮다: 면적 가중 평균
+    r.soil = (r.soil * r.arableHa + SOIL_OF_CLEARED_LAND * d) / (r.arableHa + d);
+    r.arableHa += d;
+    r.clearableHa -= d;
+    r.clearedTotalHa += d;
+    c.progressHa += d;
+  }
+  if (c.progressHa >= c.targetHa - 1e-9 || r.clearableHa <= 1e-9) {
+    addLog(w, r.id, "system", `개간 사업이 끝났다. ${fmt(c.progressHa, 1)}ha가 경작지가 되었다.`);
+    r.clearing = null;
+  }
+}
+
+export type CommandResult = { ok: true } | { ok: false; reason: string };
+
+export function startClearing(w: World, regionId: number, workers: number, targetHa: number): CommandResult {
+  const r = w.regions.find((x) => x.id === regionId);
+  if (!r) return { ok: false, reason: "없는 지역입니다." };
+  if (r.clearing) return { ok: false, reason: "이미 진행 중인 개간 사업이 있습니다." };
+  if (!(workers >= 1)) return { ok: false, reason: "인부는 1명 이상이어야 합니다." };
+  if (workers > popOf(r, "farmer")) return { ok: false, reason: "농민 수보다 많은 인부를 보낼 수 없습니다." };
+  if (!(targetHa > 0)) return { ok: false, reason: "목표 면적이 0보다 커야 합니다." };
+  if (targetHa > r.clearableHa) return { ok: false, reason: `개간 가능한 땅은 ${fmt(r.clearableHa)}ha뿐입니다.` };
+  r.clearing = { workers, targetHa, progressHa: 0, reservedForHarvest: 0, reservedUntilDay: 0 };
+  addLog(w, r.id, "player", `개간 사업을 시작했다. 인부 ${fmt(workers)}명, 목표 ${fmt(targetHa)}ha.`);
+  return { ok: true };
+}
+
+export function stopClearing(w: World, regionId: number): CommandResult {
+  const r = w.regions.find((x) => x.id === regionId);
+  if (!r || !r.clearing) return { ok: false, reason: "진행 중인 개간 사업이 없습니다." };
+  addLog(w, r.id, "player", `개간 사업을 중단했다. 지금까지 ${fmt(r.clearing.progressHa, 1)}ha를 개간했다.`);
+  r.clearing = null;
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* 예측                                                                */
+/* ------------------------------------------------------------------ */
+export function metricsOf(r: Region): Metrics {
+  return {
+    pop: totalPop(r),
+    starvationDeaths: r.starvationDeathsTotal,
+    granaryKg: r.granaryKg,
+    seedKg: r.seedKg,
+    arableHa: r.arableHa,
+    sownHa: r.sownHa,
+    lastHarvestKg: r.lastHarvest ? r.lastHarvest.value : null,
+    lastHarvestFraction: r.lastHarvestFraction,
+    clearedTotalHa: r.clearedTotalHa,
+  };
+}
+
+/** 모델 전체를 복제한다. 기상 고정 함수는 복제 대상이 아니다. */
+export function cloneWorld(w: World): World {
+  const { weatherOverride: _drop, ...rest } = w;
+  void _drop;
+  return structuredClone(rest) as World;
+}
+
+/**
+ * 평년 기상(1.0)을 가정하고 모델을 복제해 각 시점까지 돌리며 상태를 기록한다.
+ * 선택지의 결과를 손으로 쓰지 않고 모델 자체로 계산하기 위한 함수다.
+ */
+export function forecastSeries(
+  w: World,
+  regionId: number,
+  checkpoints: Checkpoint[],
+  mutate?: (c: World, r: Region) => void,
+): { days: number; label: string; metrics: Metrics }[] {
+  const c = cloneWorld(w);
+  c.eventsEnabled = false;
+  c.pending = null;
+  c.weatherOverride = () => 1.0;
+  const r = c.regions.find((x) => x.id === regionId)!;
+  mutate?.(c, r);
+  const out: { days: number; label: string; metrics: Metrics }[] = [];
+  let done = 0;
+  for (const cp of checkpoints) {
+    step(c, cp.days - done);
+    done = cp.days;
+    out.push({ days: cp.days, label: cp.label, metrics: metricsOf(c.regions.find((x) => x.id === regionId)!) });
+  }
+  return out;
+}
+
+export function forecast(w: World, regionId: number, days: number, mutate?: (c: World, r: Region) => void): Metrics {
+  return forecastSeries(w, regionId, [{ days, label: "" }], mutate)[0]!.metrics;
+}
+
+/* ------------------------------------------------------------------ */
+/* 이벤트                                                              */
+/* ------------------------------------------------------------------ */
+function eventKey(ev: EventDef, r: Region, w: World): string {
+  return `${ev.id}:${r.id}:${dateOf(w.day).year}`;
+}
+
+function openPendingIfTriggered(w: World): boolean {
+  if (!w.eventsEnabled || w.pending) return false;
+  for (const r of w.regions) {
+    for (const ev of EVENTS) {
+      if (w.firedKeys.includes(eventKey(ev, r, w))) continue;
+      if (!ev.check(w, r)) continue;
+      const opts = ev.options(w, r);
+      const horizonDays = ev.checkpoints[ev.checkpoints.length - 1]!.days;
+      const pending: PendingEvent = {
+        eventId: ev.id,
+        regionId: r.id,
+        day: w.day,
+        title: ev.title,
+        text: ev.text(w, r),
+        horizonDays,
+        checkpoints: ev.checkpoints,
+        before: metricsOf(r),
+        options: opts.map((o) => {
+          const series = forecastSeries(w, r.id, ev.checkpoints, (c, rr) => o.apply(c, rr));
+          return { id: o.id, label: o.label, forecast: series[series.length - 1]!.metrics, series };
+        }),
+      };
+      w.pending = pending;
+      w.firedKeys.push(eventKey(ev, r, w));
+      return true;
+    }
+  }
+  return false;
+}
+
+export function resolveEvent(w: World, optionId: string): CommandResult {
+  const p = w.pending;
+  if (!p) return { ok: false, reason: "처리할 사건이 없습니다." };
+  const ev = EVENTS.find((e) => e.id === p.eventId)!;
+  const r = w.regions.find((x) => x.id === p.regionId)!;
+  const opt = ev.options(w, r).find((o) => o.id === optionId);
+  const po = p.options.find((o) => o.id === optionId);
+  if (!opt || !po) return { ok: false, reason: "없는 선택지입니다." };
+  const logText = opt.logText(w, r);
+  opt.apply(w, r);
+  addLog(w, r.id, "event", `${p.title}: ${opt.label}. ${logText}`);
+  const decision: Decision = {
+    id: w.decisions.length + 1,
+    day: w.day,
+    regionId: r.id,
+    eventId: p.eventId,
+    title: p.title,
+    optionId: opt.id,
+    optionLabel: opt.label,
+    before: p.before,
+    forecast: po.forecast,
+    dueDay: w.day + p.horizonDays,
+    actual: null,
+  };
+  w.decisions.push(decision);
+  w.pending = null;
+  return { ok: true };
+}
+
+function settleDecisions(w: World) {
+  for (const d of w.decisions) {
+    if (d.actual || w.day < d.dueDay) continue;
+    const r = w.regions.find((x) => x.id === d.regionId)!;
+    d.actual = metricsOf(r);
+    addLog(
+      w,
+      r.id,
+      "system",
+      `결정 결과 확인 — ${d.optionLabel}: 예측 인구 ${fmt(d.forecast.pop)}명, 실제 ${fmt(d.actual.pop)}명.`,
+    );
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 하루 진행                                                           */
+/* ------------------------------------------------------------------ */
+/** 하루를 진행한다. 사건이 열려 진행하지 못하면 false. */
+export function stepDay(w: World): boolean {
+  if (w.pending) return false;
+  if (openPendingIfTriggered(w)) return false;
+
   const { year, dayOfYear } = dateOf(w.day);
 
   for (const r of w.regions) {
     // 1) 곡창 보관 손실
     r.granaryKg -= r.granaryKg * STORAGE_LOSS_PER_DAY;
 
-    // 2) 수확
-    if (dayOfYear === HARVEST_DAY_OF_YEAR) {
-      const h = computeHarvest(w.seed, year, r, w.weatherOverride);
-      r.lastHarvest = h;
-      r.granaryKg += h.value;
-    }
+    // 2) 파종·수확
+    if (dayOfYear === SOWING_DAY_OF_YEAR) sow(r, w.day);
+    if (dayOfYear === HARVEST_DAY_OF_YEAR) harvest(w, r, year);
 
-    // 3) 소비. 지역 곡창에서 모두가 같은 비율로 먹는다(알려진 단순화).
-    const need = totalPop(r) * GRAIN_KG_PER_PERSON_DAY;
+    // 3) 개간
+    advanceClearing(w, r);
+
+    // 4) 소비. 지역 곡창에서 모두가 같은 비율로 먹는다(알려진 단순화).
+    const need = dailyNeedKg(r);
     const eaten = Math.min(need, r.granaryKg);
     r.granaryKg -= eaten;
     r.monthNeedKg += need;
@@ -147,10 +384,13 @@ export function stepDay(w: World): void {
 
   w.day += 1;
 
-  // 4) 매월 말 인구 변화
+  // 5) 매월 말 인구 변화
   if (w.day % DAYS_PER_MONTH === 0) {
     for (const r of w.regions) applyMonthlyDemography(r);
   }
+
+  settleDecisions(w);
+  return true;
 }
 
 function applyMonthlyDemography(r: Region): void {
@@ -165,6 +405,7 @@ function applyMonthlyDemography(r: Region): void {
   const baseDeaths = (pop * DEATHS_PER_1000_YEAR) / 1000 * monthShare;
   const starvationDeaths = pop * STARVATION_DEATH_RATE_AT_FULL_DEFICIT * deficit * monthShare;
   const deaths = Math.min(pop, baseDeaths + starvationDeaths);
+  r.starvationDeathsTotal += Math.min(starvationDeaths, deaths);
 
   const ratio = pop > 0 ? (pop + births - deaths) / pop : 1;
   for (const c of r.cohorts) c.pop *= ratio;
@@ -199,6 +440,12 @@ function applyMonthlyDemography(r: Region): void {
   r.monthEatenKg = 0;
 }
 
-export function step(w: World, days: number): void {
-  for (let i = 0; i < days; i++) stepDay(w);
+/** days일 진행한다. 사건이 열리면 거기서 멈추고, 실제로 진행한 일수를 돌려준다. */
+export function step(w: World, days: number): number {
+  let done = 0;
+  for (let i = 0; i < days; i++) {
+    if (!stepDay(w)) break;
+    done++;
+  }
+  return done;
 }

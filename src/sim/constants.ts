@@ -19,10 +19,12 @@ export const GRAIN_KG_PER_PERSON_DAY = 0.5;
  *  이 값은 "실제로 파종한 면적"당 수확량이다. 휴경지는 arableHa에 넣지 않는다. */
 export const YIELD_KG_PER_HA = 700;
 
-/** 수확량 중 다음 해 종자로 떼어 두는 비율. 단위: 무차원. 근사.
- *  출처(2차): 위키백과 "Agriculture in the Middle Ages"에 따르면 서식스 장원들의 1350~1399년 평균은
- *  씨앗 1에 수확 밀 4.34, 보리 4.01, 귀리 2.87이다. 밀 기준 1/4.34 ≈ 0.23, 4:1이면 0.25. */
-export const SEED_FRACTION = 0.25;
+/** 헥타르당 파종에 드는 종자. 단위: kg/ha. 근사.
+ *  확인한 출처: Winchester 주교 장원들의 밀 파종량은 에이커당 2.0~2.5부셸(Schneider 2011 논문 본문).
+ *  밀 1부셸을 약 27kg으로 보면(일반 상식, 이번에 출처 미확인) 에이커당 약 54~68kg, 헥타르당 약 135~170kg.
+ *  150을 쓴다. 평년 수확량 700과 비교하면 수확 대 파종 비율이 약 4.7:1로, 서식스 장원의 밀 4.34:1
+ *  (위키백과, 2차)과 같은 자릿수다. */
+export const SEED_KG_PER_HA = 150;
 
 /** 농민 1명이 경작할 수 있는 파종 면적. 단위: ha/인. 임시(약한 근거 있음).
  *  약한 근거: 잉글랜드 장원의 가버게이트(virgate)는 명목상 약 30에이커(24~32에이커 범위),
@@ -65,3 +67,21 @@ export const WEATHER_SIGMA = 0.18;
  *  든다. 0.4로 둔다. */
 export const WEATHER_MIN = 0.4;
 export const WEATHER_MAX = 1.35;
+
+/** 파종일. 단위: 연중 일차. 임시. 봄(0~89일)의 중간. */
+export const SOWING_DAY_OF_YEAR = 60;
+
+/** 파종 점검일(이벤트 발생 시점). 단위: 연중 일차. 임시. 파종 15일 전. */
+export const SPRING_CHECK_DAY_OF_YEAR = 45;
+
+/** 수확 직전 점검일(이벤트 발생 시점). 단위: 연중 일차. 임시. 수확 15일 전. */
+export const HARVEST_ALERT_DAY_OF_YEAR = HARVEST_DAY_OF_YEAR - 15;
+
+/** 개간(숲·황무지를 경작지로 만드는 일)에 드는 노동. 단위: 인·일/ha. 임시. **출처를 찾지 못했다.**
+ *  확인한 것은 정성적 서술뿐이다: 개간은 노동집약적이고 오래 걸리는 일이며, 불을 놓아 덤불을 치우고
+ *  그루터기를 뽑는 작업을 포함한다(위키백과 "Assarting"). 결과가 이 값에 민감하므로 근거 확보가 필요하다. */
+export const CLEARING_LABOR_DAYS_PER_HA = 150;
+
+/** 새로 개간한 땅의 지력. 단위: 배. 임시. 처음부터 좋은 땅이 먼저 개간되었다고 보고 평균보다 낮게 둔다.
+ *  (수확 체감은 Broadberry 외가 맬서스 모형의 전제로 언급하지만, 이 수치 자체는 근거 없음) */
+export const SOIL_OF_CLEARED_LAND = 0.85;
