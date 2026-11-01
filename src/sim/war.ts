@@ -33,6 +33,7 @@ import {
 import { TURN_DAYS, dateOf, turnOf } from "./calendar";
 import { Rng } from "./rng";
 import { popOf, seasonIndexOf, totalPop } from "./state";
+import { fortMultipliers, roadFalloffMultipliers } from "./structures";
 import type { Realm, Region, Stratum, TurnReport, WarState, World } from "./state";
 
 /** 구간 이름: 위에서 아래로 북부, 중부, 남부 */
@@ -202,8 +203,8 @@ export function focusWeights(front: number[], orders: number[], realm: Realm): n
 }
 
 /** 점마다 보급 배율. 자기 수도에서 멀수록 약하다. */
-export function supplyMultipliers(front: number[], capitalX: number, falloffMult = 1): number[] {
-  return front.map((x) => Math.max(SUPPLY_MIN, 1 - Math.abs(x - capitalX) / (SUPPLY_FALLOFF_UNITS * falloffMult)));
+export function supplyMultipliers(front: number[], capitalX: number, falloffMult: number | number[] = 1): number[] {
+  return front.map((x, i) => Math.max(SUPPLY_MIN, 1 - Math.abs(x - capitalX) / (SUPPLY_FALLOFF_UNITS * (typeof falloffMult === "number" ? falloffMult : falloffMult[i]!))));
 }
 
 export interface Pressure {
@@ -231,10 +232,12 @@ export function computePressure(w: World, withLuck = false): Pressure {
   const sR = wR.reduce((a, w, i) => a + w * frontage[i]!, 0);
   const effP = effectiveSoldiers(playerRegion(w), w.day, withLuck ? turnLuck(w, "player") : 1);
   const effR = effectiveSoldiers(rivalRegion(w), w.day, withLuck ? turnLuck(w, "rival") : 1);
-  const supP = supplyMultipliers(war.front, war.capitals.player.x, playerRegion(w).rules.supplyFalloffMult);
-  const supR = supplyMultipliers(war.front, war.capitals.rival.x, rivalRegion(w).rules.supplyFalloffMult);
-  const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]!);
-  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]!);
+  const roads = roadFalloffMultipliers(w);
+  const forts = fortMultipliers(w);
+  const supP = supplyMultipliers(war.front, war.capitals.player.x, roads.player.map((m) => m * playerRegion(w).rules.supplyFalloffMult));
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x, roads.rival.map((m) => m * rivalRegion(w).rules.supplyFalloffMult));
+  const playerDensity = frontage.map((_, i) => ((effP * wP[i]!) / sP) * supP[i]! * forts.player[i]!);
+  const rivalDensity = frontage.map((_, i) => ((effR * wR[i]!) / sR) * supR[i]! * forts.rival[i]!);
   const net = playerDensity.map((d, i) => d - rivalDensity[i]!);
   const vmaxUnits = (V_MAX_KM_PER_DAY / UNIT_KM) * SEASON_MOVE_MULT[seasonIndexOf(w.day)]!;
   const force = net.map((n) => vmaxUnits * Math.tanh(n / PRESSURE_SCALE_PER_KM));
@@ -529,6 +532,8 @@ export function newWarState(playerRegionId: number, rivalRegionId: number, ai?: 
     result: null,
     ai: { aggression: 0.6, startDay: 90, levyShare: 0.05, harvestLevyShare: 0.02, mode: ai?.mode ?? "search", profile: ai?.profile ?? "aggressor", edicts: ai?.edicts ?? true },
     edicts: { player: { enacted: [], researching: null }, rival: { enacted: [], researching: null } },
+    structures: [],
+    nextStructureId: 1,
     reports: [],
     turnStart: { day: 0, playerAreaHa: playerAreaHa(front), playerVillages: playerVillageCount(front), playerSoldiers: 0, rivalSoldiers: 0, front: [...front], playerCasualties: 0, rivalCasualties: 0, pop: 0 },
   };

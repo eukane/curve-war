@@ -148,3 +148,27 @@ export const EDICT_SLOTS = 2;
 
 /** 법령 하나를 연구해 시행하는 데 걸리는 기간. 단위: 일. 임시. (2턴) */
 export const EDICT_RESEARCH_DAYS = 180;
+
+/* ------------------------------------------------------------------ */
+/* 건설 (로드맵 단계 2b). 아래 값은 모두 "임시"다.                                                  */
+/* ------------------------------------------------------------------ */
+
+/** 한 세력이 동시에 진행할 수 있는 건설 수. 임시. */
+export const MAX_CONCURRENT_BUILDS = 2;
+
+/** 요새: 인부 수(명), 공사 기간(일), 인접 효과. 임시. 근거 없음.
+ *  요새는 구간 앞(전선에서 FORT_OFFSET_UNITS만큼 자기 쪽)에 짓고, 자기 쪽에 있는 동안 그 구간 주변의
+ *  병력 밀도를 (1 + FORT_DENSITY_BONUS) 배까지 높인다. 전선이 요새를 넘으면 적이 차지해 효과가 적에게 간다. */
+export const FORT_WORKERS = 600;
+export const FORT_DAYS = 90;
+export const FORT_DENSITY_BONUS = 0.35;
+/** 요새 효과가 미치는 구간 수(점 개수)와 전선까지 거리(지도 단위). 효과는 거리와 구간 차이에 따라 선형으로 약해진다. */
+export const FORT_SPREAD_POINTS = 3;
+export const FORT_REACH_UNITS = 150;
+export const FORT_OFFSET_UNITS = 40;
+
+/** 도로: 수도에서 구간까지. 보급 한계 거리를 해당 구간 주변에서 (1 + ROAD_FALLOFF_BONUS) 배까지 늘린다. 임시. */
+export const ROAD_WORKERS = 500;
+export const ROAD_DAYS = 180;
+export const ROAD_FALLOFF_BONUS = 0.5;
+export const ROAD_SPREAD_POINTS = 3;

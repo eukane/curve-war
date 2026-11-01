@@ -39,6 +39,25 @@ export const defaultRules = (): Rules => ({
   disbandReturn: 1,
 });
 
+export type StructureKind = "fort" | "road";
+
+/** 건설물. 공사 중이거나 완공된 요새와 도로 */
+export interface Structure {
+  id: number;
+  realm: Realm;
+  kind: StructureKind;
+  /** 전선 점 번호 (0~16) */
+  sector: number;
+  /** 요새의 x 좌표 (지도 단위). 도로는 쓰지 않는다 */
+  x: number;
+  /** 공사 기간과 진행 (일) */
+  totalDays: number;
+  progressDays: number;
+  /** 공사에 투입된 인부 수 (공사 중에만 농사에서 빠진다) */
+  workers: number;
+  done: boolean;
+}
+
 export interface EdictState {
   /** 시행 중인 법령 id */
   enacted: string[];
@@ -87,6 +106,8 @@ export interface ClearingProject {
 export interface Region extends RegionSeed {
   /** 법령으로 정해지는 규칙 (법령이 없으면 기본값) */
   rules: Rules;
+  /** 공사에 투입 중인 인부 (농사에서 빠진다) */
+  buildWorkers: number;
   /** 올해 파종한 면적. 단위: ha */
   sownHa: number;
   /** 훈련 중인 징집병. 이들은 병사 수에 포함되지만 readyDay 전에는 싸우지 못한다 */
@@ -231,6 +252,9 @@ export interface WarState {
   expected?: boolean;
   /** 각 세력의 법령 */
   edicts: Record<Realm, EdictState>;
+  /** 건설물 (공사 중 포함) */
+  structures: Structure[];
+  nextStructureId: number;
   ai: {
     aggression: number;
     startDay: number;
@@ -286,7 +310,7 @@ export function clearingWorkersAt(r: Region, day: number): number {
 /** 어느 날 들에 나갈 수 있는 농민 수 */
 export function fieldFarmersAt(r: Region, day: number): number {
   const ready = Math.max(0, popOf(r, "soldier") - r.trainees.reduce((a, t) => a + (t.readyDay > day ? t.n : 0), 0));
-  const labor = popOf(r, "farmer") - clearingWorkersAt(r, day) + ready * r.rules.soldierFieldLabor;
+  const labor = popOf(r, "farmer") - clearingWorkersAt(r, day) - r.buildWorkers + ready * r.rules.soldierFieldLabor;
   return Math.max(0, labor * r.rules.fieldLaborMult);
 }
 

@@ -26,7 +26,8 @@ import type { Explained } from "./explain";
 import { Rng } from "./rng";
 import { pickProfile, planAi } from "./ai";
 import { aiEdicts, tickEdicts } from "./edicts";
-import { aiPlan, beginTurn, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
+import { aiBuild, tickBuilds } from "./structures";
+import { aiPlan, beginTurn, computePressure, disbandTroops, endTurn, levyTroops, newWarState, playerAreaHa, soldiersOf, stepWarDay } from "./war";
 import {
   SCENARIOS,
   clearingWorkersAt,
@@ -59,6 +60,7 @@ export function createWorld(
       cohorts: s.cohorts.map((c) => ({ ...c })),
       sownHa: 0,
       rules: defaultRules(),
+      buildWorkers: 0,
       trainees: [],
       clearing: null,
       monthNeedKg: 0,
@@ -487,6 +489,7 @@ export function stepDay(w: World): boolean {
     else if (w.war.ai.mode === "search") planAi(w, { clone: cloneWorld, step });
     else aiPlan(w);
     aiEdicts(w);
+    if (w.war.ai.edicts !== false) aiBuild(w, computePressure(w).net);
   }
 
   const { year, dayOfYear } = dateOf(w.day);
@@ -512,6 +515,7 @@ export function stepDay(w: World): boolean {
 
   // 5) 전쟁과 법령
   tickEdicts(w);
+  tickBuilds(w);
   stepWarDay(w);
 
   w.day += 1;
