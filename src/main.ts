@@ -17,7 +17,8 @@ import {
   stopClearing,
   totalPop,
 } from "./sim/world";
-import type { Metrics, PendingEvent, World } from "./sim/world";
+import { SCENARIOS } from "./sim/world";
+import type { Metrics, PendingEvent, ScenarioId, World } from "./sim/world";
 
 const world: World = createWorld(20260101, START_REGIONS);
 const REGION_ID = START_REGIONS[0]!.id;
@@ -129,6 +130,7 @@ function renderSummary() {
 /* ------------------------------------------------------------------ */
 let clearBuilt = false;
 let lastPreviewKey = "";
+let previewScenario: ScenarioId = "normal";
 
 function buildClearPanel() {
   const p = $("clear-panel");
@@ -179,7 +181,7 @@ function renderClearPreview() {
   const r = region();
   const wi = +(($("in-workers") as HTMLInputElement).value);
   const ti = +(($("in-target") as HTMLInputElement).value);
-  const key = `${Math.floor(world.day / 30)}:${wi}:${ti}`;
+  const key = `${Math.floor(world.day / 30)}:${wi}:${ti}:${previewScenario}`;
   if (key === lastPreviewKey) return;
   lastPreviewKey = key;
 
@@ -190,10 +192,20 @@ function renderClearPreview() {
     { days: DAYS_PER_YEAR * 10, label: "10년 뒤" },
     { days: DAYS_PER_YEAR * 40, label: "40년 뒤" },
   ];
-  const base = forecastSeries(world, REGION_ID, cps);
-  const withIt = forecastSeries(world, REGION_ID, cps, (c) => {
-    startClearing(c, REGION_ID, wi, ti);
-  });
+  const base = forecastSeries(world, REGION_ID, cps, undefined, previewScenario);
+  const withIt = forecastSeries(
+    world,
+    REGION_ID,
+    cps,
+    (c) => {
+      startClearing(c, REGION_ID, wi, ti);
+    },
+    previewScenario,
+  );
+  const scNote = SCENARIOS.find((x) => x.id === previewScenario)!.note;
+  const toggle = SCENARIOS.map(
+    (sc) => `<button data-sc="${sc.id}" aria-pressed="${sc.id === previewScenario}">${sc.label}</button>`,
+  ).join("");
   const kWith = carryingCapacity(r, ti);
 
   const row = (label: string, f: (m: Metrics) => number, fmtv: (v: number) => string, goodWhenHigher: boolean) =>
@@ -217,13 +229,22 @@ function renderClearPreview() {
 
   $("clear-preview").innerHTML = `
     <p style="margin:8px 0 4px"><b>예상 완공:</b> ${fmt(days)}일 뒤 (${done}) · <b>수용력:</b> ${fmt(carryingCapacity(r))} → <span class="good">${fmt(kWith)}</span> 명 · ${labor}</p>
-    <table class="wide"><thead><tr><th>평년 기상 예측 (안 함 → 시작)</th>${cps.map((c) => `<th class="n">${c.label}</th>`).join("")}</tr></thead><tbody>
+    <div class="row" role="group" aria-label="예측 시나리오" style="margin:8px 0 4px">${toggle}<span class="note">${esc(scNote)}</span></div>
+    <table class="wide"><thead><tr><th>예측 (안 함 → 시작)</th>${cps.map((c) => `<th class="n">${c.label}</th>`).join("")}</tr></thead><tbody>
       ${row("인구 (명)", (m) => m.pop, (v) => fmt(v), true)}
       ${row("누적 기아 사망 (명)", (m) => m.starvationDeaths, (v) => fmt(v), false)}
       ${row("최근 수확 입고 (t)", (m) => (m.lastHarvestKg ?? 0) / 1000, (v) => fmt(v), true)}
       ${row("경작지 (ha)", (m) => m.arableHa, (v) => fmt(v), true)}
     </tbody></table>
-    <p class="note" style="margin:6px 0 0">예측은 모델을 복제해 실제로 돌린 값입니다. 흉년이 오면 달라집니다.</p>`;
+    <p class="note" style="margin:6px 0 0">예측은 모델을 복제해 실제로 돌린 값입니다. 실제 기상은 이 두 시나리오 사이 어디든 될 수 있습니다.</p>`;
+  $("clear-preview")
+    .querySelectorAll<HTMLButtonElement>("button[data-sc]")
+    .forEach((b) =>
+      b.addEventListener("click", () => {
+        previewScenario = b.dataset.sc as ScenarioId;
+        renderClearPreview();
+      }),
+    );
 }
 
 function renderClearActive() {
@@ -285,15 +306,18 @@ function modalHtml(p: PendingEvent): string {
   const fake = new Set(dominatedOptions(p.options).map((d) => d.id));
   const opts = p.options
     .map((o) => {
-      const rows = o.series
-        .map(
-          (s) =>
-            `<tr><td>${esc(s.label)}</td><td class="n mono">${fmt(s.metrics.pop)}</td><td class="n mono">${fmt(s.metrics.starvationDeaths - p.before.starvationDeaths)}</td><td class="n mono">${tons(s.metrics.granaryKg + s.metrics.seedKg)}</td><td class="n mono">${s.metrics.lastHarvestKg === null ? "—" : tons(s.metrics.lastHarvestKg)}</td></tr>`,
-        )
-        .join("");
-      return `<div class="opt"><div class="head"><span>${esc(o.label)}</span><button class="primary" data-opt="${esc(o.id)}">이걸로 결정</button></div>
-        <div class="wrapx"><table class="wide"><thead><tr><th>시점 (평년 기상 가정)</th><th class="n">인구</th><th class="n">이후 기아 사망</th><th class="n">곡창+종자</th><th class="n">최근 수확</th></tr></thead><tbody>${rows}</tbody></table></div>
-        ${fake.has(o.id) ? `<p class="note bad" style="margin:4px 0 0">주의: 이 선택지는 지평 끝에서 다른 선택지보다 모든 면에서 나쁩니다.</p>` : ""}</div>`;
+      const tables = SCENARIOS.map((sc) => {
+        const rows = o.outcomes[sc.id].series
+          .map(
+            (s) =>
+              `<tr><td>${esc(s.label)}</td><td class="n mono">${fmt(s.metrics.pop)}</td><td class="n mono">${fmt(s.metrics.starvationDeaths - p.before.starvationDeaths)}</td><td class="n mono">${tons(s.metrics.granaryKg)}</td><td class="n mono">${s.metrics.lastHarvestKg === null ? "—" : tons(s.metrics.lastHarvestKg)}</td></tr>`,
+          )
+          .join("");
+        return `<h3>${esc(sc.label)} <span class="note" style="font-weight:400">— ${esc(sc.note)}</span></h3>
+          <div class="wrapx"><table class="wide"><thead><tr><th>시점</th><th class="n">인구</th><th class="n">이후 기아 사망</th><th class="n">곡창</th><th class="n">최근 수확</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }).join("");
+      return `<div class="opt"><div class="head"><span>${esc(o.label)}</span><button class="primary" data-opt="${esc(o.id)}">이걸로 결정</button></div>${tables}
+        ${fake.has(o.id) ? `<p class="note bad" style="margin:4px 0 0">주의: 이 선택지는 평년·흉년 어느 쪽에서도 다른 선택지보다 모든 면에서 나쁩니다.</p>` : ""}</div>`;
     })
     .join("");
   return `<h2 id="modal-title" style="font-size:18px">${esc(p.title)}</h2>

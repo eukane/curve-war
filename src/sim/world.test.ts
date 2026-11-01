@@ -21,6 +21,7 @@ import {
   computeHarvest,
   createWorld,
   forecast,
+  forecastSeries,
   popOf,
   resolveEvent,
   startClearing,
@@ -323,12 +324,26 @@ describe("품질 검사: 가짜 선택지 판별", () => {
     expect(dominates(b, a)).toBe(false);
   });
 
-  it("지배당한 선택지를 찾아낸다", () => {
+  const opt = (id: string, normal: Metrics, bad: Metrics): PendingOption => ({
+    id,
+    label: id,
+    outcomes: { normal: { forecast: normal, series: [] }, bad: { forecast: bad, series: [] } },
+  });
+
+  it("모든 시나리오에서 지배당한 선택지를 찾아낸다", () => {
     const opts = [
-      { id: "x", label: "x", forecast: m({ pop: 31_000 }), series: [] },
-      { id: "y", label: "y", forecast: m({ pop: 29_000 }), series: [] },
-    ] as PendingOption[];
+      opt("x", m({ pop: 31_000 }), m({ pop: 31_000 })),
+      opt("y", m({ pop: 29_000 }), m({ pop: 29_000 })),
+    ];
     expect(dominatedOptions(opts)).toEqual([{ id: "y", by: "x" }]);
+  });
+
+  it("평년에는 지지만 흉년에는 이기는 선택지(비축 같은 보험)는 가짜가 아니다", () => {
+    const opts = [
+      opt("쓴다", m({ pop: 31_000 }), m({ pop: 26_000 })), // 평년엔 낫고 흉년엔 크게 손해
+      opt("아낀다", m({ pop: 30_000 }), m({ pop: 29_000 })), // 평년엔 조금 손해, 흉년엔 이득
+    ];
+    expect(dominatedOptions(opts)).toEqual([]);
   });
 });
 
@@ -345,8 +360,8 @@ describe("폐기한 이벤트는 품질 검사에서 실제로 걸린다", () =>
       // 단기 이득은 실제로 있다: 첫 시점(올가을 수확 직후)에는 half의 인구가 더 높다.
       const keep = w.pending!.options.find((o) => o.id === "keep")!;
       const half = w.pending!.options.find((o) => o.id === "half")!;
-      expect(half.series[0]!.metrics.pop).toBeGreaterThan(keep.series[0]!.metrics.pop);
-      expect(half.series[2]!.metrics.pop).toBeLessThan(keep.series[2]!.metrics.pop);
+      expect(half.outcomes.normal.series[0]!.metrics.pop).toBeGreaterThan(keep.outcomes.normal.series[0]!.metrics.pop);
+      expect(half.outcomes.normal.series[2]!.metrics.pop).toBeLessThan(keep.outcomes.normal.series[2]!.metrics.pop);
     });
   });
 
@@ -407,10 +422,10 @@ describe("이벤트 엔진", () => {
       const { w } = fresh();
       step(w, 100);
       const [none, clear] = w.pending!.options;
-      expect(none!.series.map((s) => s.days)).toEqual([100, 400]);
+      expect(none!.outcomes.normal.series.map((s) => s.days)).toEqual([100, 400]);
       // 개간을 선택하면 경작지가 실제로 늘고, 일손이 줄어 수확은 줄어든다
-      expect(clear!.forecast.arableHa).toBeGreaterThan(none!.forecast.arableHa + 900);
-      expect(clear!.forecast.lastHarvestKg!).toBeLessThan(none!.forecast.lastHarvestKg!);
+      expect(clear!.outcomes.normal.forecast.arableHa).toBeGreaterThan(none!.outcomes.normal.forecast.arableHa + 900);
+      expect(clear!.outcomes.normal.forecast.lastHarvestKg!).toBeLessThan(none!.outcomes.normal.forecast.lastHarvestKg!);
     });
   });
 
@@ -419,7 +434,7 @@ describe("이벤트 엔진", () => {
       const { w, r } = fresh(5);
       w.weatherOverride = () => 1.0;
       step(w, 100);
-      const predicted = w.pending!.options.find((o) => o.id === "clear")!.forecast;
+      const predicted = w.pending!.options.find((o) => o.id === "clear")!.outcomes.normal.forecast;
       resolveEvent(w, "clear");
       step(w, 400);
       const d = w.decisions[0]!;
@@ -436,11 +451,24 @@ describe("이벤트 엔진", () => {
       const { w } = fresh(5);
       w.weatherOverride = (y) => (y === 0 ? 0.5 : 1.0);
       step(w, 100);
-      const predicted = w.pending!.options.find((o) => o.id === "none")!.forecast;
+      const predicted = w.pending!.options.find((o) => o.id === "none")!.outcomes.normal.forecast;
       resolveEvent(w, "none");
       step(w, 400);
       expect(Math.abs(w.decisions[0]!.actual!.granaryKg - predicted.granaryKg)).toBeGreaterThan(500_000);
     });
+  });
+
+  it("흉년 시나리오는 다음 수확만 BAD_WEATHER로 돌리고 나머지는 평년이다", () => {
+    const { w } = fresh(5);
+    step(w, 100); // 첫 수확(240일차) 전
+    const normal = forecastSeries(w, 1, [{ days: 400, label: "" }], undefined, "normal")[0]!.metrics;
+    const bad = forecastSeries(w, 1, [{ days: 400, label: "" }], undefined, "bad")[0]!.metrics;
+    // 400일 뒤 = 두 번째 수확(600일차) 전. 마지막으로 거둔 수확은 첫 수확이고, 흉년 시나리오에서는 그것이 흉년이다.
+    expect(bad.lastHarvestKg!).toBeLessThan(normal.lastHarvestKg! * 0.7);
+    // 두 번째 수확은 평년으로 돌아간다
+    const normal2 = forecastSeries(w, 1, [{ days: 600, label: "" }], undefined, "normal")[0]!.metrics;
+    const bad2 = forecastSeries(w, 1, [{ days: 600, label: "" }], undefined, "bad")[0]!.metrics;
+    expect(bad2.lastHarvestKg!).toBeGreaterThan(normal2.lastHarvestKg! * 0.9);
   });
 
   it("예측용 복제는 원본을 건드리지 않는다", () => {

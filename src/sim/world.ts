@@ -1,5 +1,6 @@
 import { DAYS_PER_MONTH, DAYS_PER_YEAR, dateOf } from "./calendar";
 import {
+  BAD_WEATHER,
   BIRTHS_PER_1000_YEAR,
   BIRTH_SUPPRESSION_PER_DEFICIT,
   CLEARING_LABOR_DAYS_PER_HA,
@@ -22,13 +23,14 @@ import type { EventDef } from "./events";
 import type { Explained } from "./explain";
 import { Rng } from "./rng";
 import {
+  SCENARIOS,
   clearingWorkersAt,
   dailyNeedKg,
   fieldFarmersAt,
   popOf,
   totalPop,
 } from "./state";
-import type { Checkpoint, Decision, Metrics, PendingEvent, Region, RegionSeed, World } from "./state";
+import type { Checkpoint, Decision, Metrics, PendingEvent, Region, RegionSeed, ScenarioId, SeriesPoint, World } from "./state";
 
 export * from "./state";
 
@@ -243,23 +245,33 @@ export function cloneWorld(w: World): World {
   return structuredClone(rest) as World;
 }
 
+/** 다음 수확이 일어나는 해 */
+function nextHarvestYear(w: World): number {
+  const { year, dayOfYear } = dateOf(w.day);
+  return dayOfYear <= HARVEST_DAY_OF_YEAR ? year : year + 1;
+}
+
 /**
- * 평년 기상(1.0)을 가정하고 모델을 복제해 각 시점까지 돌리며 상태를 기록한다.
+ * 시나리오를 가정하고 모델을 복제해 각 시점까지 돌리며 상태를 기록한다.
  * 선택지의 결과를 손으로 쓰지 않고 모델 자체로 계산하기 위한 함수다.
+ * - normal: 앞으로의 기상이 모두 평년(1.0)
+ * - bad: 다음 수확만 흉년(BAD_WEATHER)이고 나머지는 평년
  */
 export function forecastSeries(
   w: World,
   regionId: number,
   checkpoints: Checkpoint[],
   mutate?: (c: World, r: Region) => void,
-): { days: number; label: string; metrics: Metrics }[] {
+  scenario: ScenarioId = "normal",
+): SeriesPoint[] {
   const c = cloneWorld(w);
   c.eventsEnabled = false;
   c.pending = null;
-  c.weatherOverride = () => 1.0;
+  const badYear = nextHarvestYear(w);
+  c.weatherOverride = scenario === "bad" ? (y) => (y === badYear ? BAD_WEATHER : 1.0) : () => 1.0;
   const r = c.regions.find((x) => x.id === regionId)!;
   mutate?.(c, r);
-  const out: { days: number; label: string; metrics: Metrics }[] = [];
+  const out: SeriesPoint[] = [];
   let done = 0;
   for (const cp of checkpoints) {
     step(c, cp.days - done);
@@ -269,8 +281,23 @@ export function forecastSeries(
   return out;
 }
 
-export function forecast(w: World, regionId: number, days: number, mutate?: (c: World, r: Region) => void): Metrics {
-  return forecastSeries(w, regionId, [{ days, label: "" }], mutate)[0]!.metrics;
+export function forecast(w: World, regionId: number, days: number, mutate?: (c: World, r: Region) => void, scenario: ScenarioId = "normal"): Metrics {
+  return forecastSeries(w, regionId, [{ days, label: "" }], mutate, scenario)[0]!.metrics;
+}
+
+/** 모든 시나리오의 예측을 한꺼번에 돌린다. */
+export function forecastAll(
+  w: World,
+  regionId: number,
+  checkpoints: Checkpoint[],
+  mutate?: (c: World, r: Region) => void,
+): Record<ScenarioId, { forecast: Metrics; series: SeriesPoint[] }> {
+  const out = {} as Record<ScenarioId, { forecast: Metrics; series: SeriesPoint[] }>;
+  for (const sc of SCENARIOS) {
+    const series = forecastSeries(w, regionId, checkpoints, mutate, sc.id);
+    out[sc.id] = { forecast: series[series.length - 1]!.metrics, series };
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -297,10 +324,11 @@ function openPendingIfTriggered(w: World): boolean {
         horizonDays,
         checkpoints: ev.checkpoints,
         before: metricsOf(r),
-        options: opts.map((o) => {
-          const series = forecastSeries(w, r.id, ev.checkpoints, (c, rr) => o.apply(c, rr));
-          return { id: o.id, label: o.label, forecast: series[series.length - 1]!.metrics, series };
-        }),
+        options: opts.map((o) => ({
+          id: o.id,
+          label: o.label,
+          outcomes: forecastAll(w, r.id, ev.checkpoints, (c, rr) => o.apply(c, rr)),
+        })),
       };
       w.pending = pending;
       w.firedKeys.push(eventKey(ev, r, w));
@@ -330,7 +358,7 @@ export function resolveEvent(w: World, optionId: string): CommandResult {
     optionId: opt.id,
     optionLabel: opt.label,
     before: p.before,
-    forecast: po.forecast,
+    forecast: po.outcomes.normal.forecast,
     dueDay: w.day + p.horizonDays,
     actual: null,
   };

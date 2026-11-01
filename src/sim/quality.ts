@@ -2,9 +2,12 @@
  * 이벤트 선택지의 품질 검사. 원칙 0: 선택은 세계를 실제로 바꾸고, 가짜 선택지를 만들지 않는다.
  *
  * 한 선택지가 다른 선택지에 "모든 핵심 지표에서 같거나 낫고, 하나 이상에서 확실히 낫다"면
- * 그 선택지는 지평 끝에서 쓸 이유가 없는 가짜 선택지다 (지배당했다고 부른다).
+ * 그 선택지는 쓸 이유가 없는 가짜 선택지다 (지배당했다고 부른다).
+ * 이 판정은 **모든 시나리오(평년, 흉년 1회)에서 동시에** 성립할 때만 내린다.
+ * 한 시나리오에서 지더라도 다른 시나리오에서 이기면 진짜 선택이다(예: 비축은 평년에는 손해, 흉년에는 이득).
  * 단기 이득이 있어도 지평 끝에서 모두 뒤진다면 가짜 딜레마다.
  */
+import { SCENARIOS } from "./state";
 import type { Metrics, PendingOption } from "./state";
 
 interface Axis {
@@ -48,7 +51,7 @@ export function dominatedOptions(options: PendingOption[]): { id: string; by: st
   const out: { id: string; by: string }[] = [];
   for (const b of options) {
     for (const a of options) {
-      if (a.id !== b.id && dominates(a.forecast, b.forecast)) {
+      if (a.id !== b.id && SCENARIOS.every((sc) => dominates(a.outcomes[sc.id].forecast, b.outcomes[sc.id].forecast))) {
         out.push({ id: b.id, by: a.id });
         break;
       }

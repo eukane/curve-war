@@ -88,7 +88,7 @@ export interface Decision {
   optionLabel: string;
   /** 결정 직전 상태 */
   before: Metrics;
-  /** 평년 기상을 가정한 예측 (결정 시점에 모델을 복제해 돌린 결과) */
+  /** 평년 시나리오 예측 (결정 시점에 모델을 복제해 돌린 결과) */
   forecast: Metrics;
   /** 이 날이 되면 실제 결과를 기록한다 */
   dueDay: number;
@@ -101,13 +101,24 @@ export interface Checkpoint {
   label: string;
 }
 
+export type ScenarioId = "normal" | "bad";
+
+export const SCENARIOS: { id: ScenarioId; label: string; note: string }[] = [
+  { id: "normal", label: "평년", note: "앞으로 기상이 모두 평년(1.0)일 때" },
+  { id: "bad", label: "흉년 1회", note: "다음 수확만 흉년(0.55)이고 나머지는 평년일 때" },
+];
+
+export interface SeriesPoint {
+  days: number;
+  label: string;
+  metrics: Metrics;
+}
+
 export interface PendingOption {
   id: string;
   label: string;
-  /** 가장 먼 시점의 예측 */
-  forecast: Metrics;
-  /** 시점별 예측. 단기 이득과 장기 대가를 함께 보여주기 위함 */
-  series: { days: number; label: string; metrics: Metrics }[];
+  /** 시나리오별 예측. 단기 이득과 장기 대가, 그리고 흉년 대비를 함께 보여주기 위함 */
+  outcomes: Record<ScenarioId, { forecast: Metrics; series: SeriesPoint[] }>;
 }
 
 export interface PendingEvent {
