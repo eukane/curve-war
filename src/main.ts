@@ -6,6 +6,7 @@ import { profileOf } from "./sim/ai";
 import { autoAssign, TRAIT_NAME, TRAIT_TEXT, ZONE_NAME, assignCommander, effectOf, levelOf } from "./sim/commanders";
 import { COMMANDER_DAYS_PER_LEVEL, COMMANDER_MAX_LEVEL, COMMANDER_TRAVEL_DAYS } from "./sim/constants";
 import { KIND_NAME, buildInfo, canBuild, cancelBuild, fortMultipliers, roadFalloffMultipliers, startBuild } from "./sim/structures";
+import { TIDE_NAME, flatMoveMult, terrainAt, tideLevel } from "./sim/terrain";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
 import { cloneWorld, createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
@@ -114,7 +115,7 @@ const SEASON_NOTE = [
 function renderSeasonNote() {
   const t = turnOf(world.day);
   const m = SEASON_MOVE_MULT[t.seasonIndex]!;
-  $("season-note").innerHTML = `<b>${t.season}</b> · 전진 속도 ×${fmt(m, 1)} — ${SEASON_NOTE[t.seasonIndex]} <span class="mu">(배율은 임시값)</span>`;
+  $("season-note").innerHTML = `<b>${t.season}</b> · 전진 속도 ×${fmt(m, 1)} — ${SEASON_NOTE[t.seasonIndex]} <span class="mu">(배율은 임시값)</span> · <b>조수</b> ${TIDE_NAME[t.seasonIndex]} — 갯벌 이동 ×${fmt(flatMoveMult(tideLevel(world.day)), 2)}`;
 }
 
 function renderEdicts() {
@@ -214,6 +215,7 @@ function renderSector() {
   const ahead = (order - war.front[i]!) * UNIT_KM;
   el.innerHTML = `<dl class="kv">
       <dt>구간</dt><dd>${sectorName(i)}</dd>
+      ${terrainLine(i)}
       <dt>우리 밀도</dt><dd>${fmt(pr.playerDensity[i]!, 1)} 명/km</dd>
       <dt>적 밀도</dt><dd>${fmt(pr.rivalDensity[i]!, 1)} 명/km</dd>
       <dt>차이</dt><dd class="${net > 1 ? "good" : net < -1 ? "bad" : ""}">${net > 0 ? "+" : ""}${fmt(net, 1)} 명/km</dd>
@@ -327,6 +329,13 @@ function renderCommanders() {
     assignCommander(world, "player", Number(b.dataset.cmd), z < 0 ? null : z);
     onOrdersChanged();
   }));
+}
+
+function terrainLine(i: number): string {
+  const t = terrainAt(world.war!.front[i]!, (i * 640) / 16, world.day);
+  if (t.features.length === 0) return `<dt>지형</dt><dd>평지</dd>`;
+  const parts = t.features.map((f) => (f.kind === "tidalflat" ? `${f.name}(${TIDE_NAME[turnOf(world.day).seasonIndex]})` : f.name));
+  return `<dt>지형</dt><dd>${parts.join(" · ")} · 이동 ×${fmt(t.moveMult, 2)}${t.rivalDensityMult > 1.005 ? ` · 적 밀도 ×${fmt(t.rivalDensityMult, 2)}` : ""}</dd>`;
 }
 
 function renderArmy() {

@@ -7,6 +7,8 @@ import { VILLAGES, computePressure, frontY, sampleFront, trainingCount } from ".
 import { popOf, totalPop } from "../sim/state";
 import { COMMAND_ZONES } from "../sim/constants";
 import { TRAIT_NAME, ZONE_NAME, levelOf } from "../sim/commanders";
+import { TERRAIN, TIDE_NAME, tideLevel } from "../sim/terrain";
+import { seasonIndexOf } from "../sim/state";
 import { fortController } from "../sim/structures";
 import { setOrder } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
@@ -169,6 +171,56 @@ export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hook
     ctx.lineWidth = 1 / k;
     for (let x = 100; x < MAP_W; x += 100) line(x, 0, x, MAP_H);
     for (let y = 100; y < MAP_H; y += 100) line(0, y, MAP_W, y);
+
+    // 지형: 갯벌은 수위만큼 물빛이 진해지고, 능선은 빗금과 이름표로 보인다
+    {
+      const lvl = tideLevel(w.day);
+      const water = css("--water", "#3d8fb5");
+      for (const f of TERRAIN) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.ellipse(f.cx, f.cy, f.rx, f.ry, 0, 0, Math.PI * 2);
+        ctx.clip();
+        if (f.kind === "tidalflat") {
+          ctx.fillStyle = water;
+          ctx.globalAlpha = 0.12 + 0.38 * lvl;
+          ctx.fillRect(f.cx - f.rx, f.cy - f.ry, f.rx * 2, f.ry * 2);
+          ctx.globalAlpha = 0.28 * (1 - lvl) + 0.06;
+          ctx.strokeStyle = water;
+          ctx.lineWidth = 1.2 / k;
+          for (let d = -f.ry; d < f.ry; d += 9) line(f.cx - f.rx, f.cy + d, f.cx + f.rx, f.cy + d + 6);
+        } else {
+          ctx.globalAlpha = 0.18;
+          ctx.strokeStyle = ink;
+          ctx.lineWidth = 1.4 / k;
+          for (let d = -f.rx - f.ry; d < f.rx + f.ry; d += 11) line(f.cx - f.rx + d, f.cy - f.ry, f.cx + f.rx + d - f.ry * 0.0, f.cy + f.ry);
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.ellipse(f.cx, f.cy, f.rx, f.ry, 0, 0, Math.PI * 2);
+        ctx.setLineDash([4 / k, 5 / k]);
+        ctx.strokeStyle = f.kind === "tidalflat" ? water : ink;
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1.5 / k;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = f.kind === "tidalflat" ? water : ink;
+        ctx.font = `${11 / k}px "Noto Sans KR", system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        const label = f.kind === "tidalflat" ? `${f.name} · ${TIDE_NAME[seasonIndexOf(w.day)]}` : f.name;
+        const lw = ctx.measureText(label).width;
+        const lx = f.kind === "tidalflat" ? f.cx - 95 : f.cx; // 갯벌 이름표는 전선(x≈500)을 피해 왼쪽에
+        const ly = f.kind === "tidalflat" ? f.cy - 50 : f.cy + 4;
+        ctx.globalAlpha = 0.8;
+        ctx.fillStyle = panel;
+        ctx.fillRect(lx - lw / 2 - 4 / k, ly - 11 / k, lw + 8 / k, 16 / k);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = f.kind === "tidalflat" ? water : ink;
+        ctx.fillText(label, lx, ly);
+      }
+    }
 
     // 영토
     const pts = sampleFront(war.front);
