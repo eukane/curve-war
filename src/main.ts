@@ -263,6 +263,16 @@ function bindCancel(el: HTMLElement) {
 function buildHtml(i: number): string {
   const season = turnOf(world.day).season;
   const busyField = season === "봄" || season === "가을";
+  /** 공사 기간 안에 파종일이나 수확일이 끼는가: 끼면 그날 일손이 줄어 곡식을 덜 거둔다 */
+  const overlap = (days: number): string | null => {
+    for (const [name, d] of [["파종", SOWING_DAY_OF_YEAR], ["수확", HARVEST_DAY_OF_YEAR]] as const) {
+      for (const y of [Math.floor(world.day / 360), Math.floor(world.day / 360) + 1]) {
+        const at = y * 360 + d;
+        if (at >= world.day && at < world.day + days) return `${at - world.day}일 뒤 ${name}일에 일손이 빠집니다`;
+      }
+    }
+    return null;
+  };
   const rows = (["fort", "road"] as const).map((kind) => {
     const info = buildInfo(kind);
     const can = canBuild(world, "player", kind, i);
@@ -276,7 +286,7 @@ function buildHtml(i: number): string {
       after = ` 완공되면 우리 밀도 ${fmt(b4, 1)} → ${fmt(af, 1)} 명/km (전선이 지금 그대로일 때).`;
     }
     const what = (kind === "fort" ? `이 구간 병력 밀도 최대 +${Math.round(FORT_DENSITY_BONUS * 100)}% (전선이 요새에 가까울 때).${after}` : "이 구간 보급이 멀리까지 닿음");
-    return `<div class="buildrow"><button data-build="${kind}" ${can.ok ? "" : "disabled"}>${KIND_NAME[kind]} 짓기</button><span class="mu">${what} · 인부 ${fmt(info.workers)}명 · ${info.days}일${can.ok ? "" : ` — <b>${esc(can.reason)}</b>`}</span></div>`;
+    return `<div class="buildrow"><button data-build="${kind}" ${can.ok ? "" : "disabled"}>${KIND_NAME[kind]} 짓기</button><span class="mu">${what} · 인부 ${fmt(info.workers)}명 · ${info.days}일${overlap(info.days) ? ` · <b class="warnline">${overlap(info.days)}</b>` : ""}${can.ok ? "" : ` — <b>${esc(can.reason)}</b>`}</span></div>`;
   });
   return `<div class="builds"><h3>건설</h3>${rows.join("")}${busyField ? `<p class="note warnline">지금은 ${season} — 인부를 빼면 ${season === "봄" ? "파종" : "수확"} 일손이 줄어 곡식을 덜 거둡니다. 여름이나 겨울이 안전합니다.</p>` : ""}${buildListHtml()}</div>`;
 }
