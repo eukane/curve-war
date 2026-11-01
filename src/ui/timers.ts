@@ -6,11 +6,12 @@ import { TURN_DAYS, turnOf } from "../sim/calendar";
 import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEED_KG_PER_HA, SOWING_DAY_OF_YEAR } from "../sim/constants";
 import { soldiersOf, trainingCount } from "../sim/war";
 import { edictOf } from "../sim/edicts";
+import { KIND_NAME } from "../sim/structures";
 import { fieldFarmersAt } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
 
 export interface Timer {
-  kind: "sow" | "harvest" | "train" | "rival" | "edict";
+  kind: "sow" | "harvest" | "train" | "rival" | "edict" | "build";
   /** 절대 일수 */
   day: number;
   title: string;
@@ -77,6 +78,16 @@ export function timersOf(w: World, preview: TurnPreview | null, horizonTurns = 2
   if (mine) out.push({ kind: "edict", day: w.day + mine.remaining, title: `법령 시행: ${edictOf(mine.id).name}`, detail: "연구가 끝나면 규칙이 바뀝니다.", level: "good" });
   const theirs = war.edicts.rival.researching;
   if (theirs) out.push({ kind: "edict", day: w.day + theirs.remaining, title: `적이 법령을 연구 중: ${edictOf(theirs.id).name}`, detail: "시행되면 적의 규칙이 바뀝니다." });
+
+  // 건설
+  for (const b of war.structures.filter((x) => !x.done)) {
+    const left = b.totalDays - b.progressDays;
+    if (b.realm === "player") {
+      out.push({ kind: "build", day: w.day + left, title: `${KIND_NAME[b.kind]} 완공 (구간 ${b.sector + 1})`, detail: `인부 ${fmt(b.workers)}명이 돌아옵니다. (${b.progressDays}/${b.totalDays}일)`, level: "good" });
+    } else {
+      out.push({ kind: "build", day: w.day + left, title: `적이 ${KIND_NAME[b.kind]}를 짓는 중 (구간 ${b.sector + 1})`, detail: "완공되면 그 구간의 적 병력 밀도가 올라갑니다." });
+    }
+  }
 
   // 적: 이번 턴 예상 병력 변화
   if (preview) {

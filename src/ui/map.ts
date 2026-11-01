@@ -5,6 +5,7 @@
 import { MAP_H, MAP_W, UNIT_KM } from "../sim/constants";
 import { VILLAGES, computePressure, frontY, sampleFront, trainingCount } from "../sim/war";
 import { popOf, totalPop } from "../sim/state";
+import { fortController } from "../sim/structures";
 import { setOrder } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
 
@@ -308,6 +309,63 @@ export function createMap(canvas: HTMLCanvasElement, getWorld: () => World, hook
       ctx.textAlign = "center";
       ctx.fillText(name, c.x, c.y + 26 / k);
     }
+    // 건설: 도로는 수도에서 그 구간까지 선, 요새는 전선 뒤(앞) 네모. 공사 중이면 점선과 진행 막대
+    for (const st of war.structures) {
+      const mine = st.realm === "player";
+      const col = mine ? colP : colR;
+      const y = frontY(st.sector);
+      const prog = st.progressDays / st.totalDays;
+      if (st.kind === "road") {
+        const c = war.capitals[st.realm];
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(war.front[st.sector]!, y);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = (st.done ? 4 : 3) / k;
+        ctx.globalAlpha = st.done ? 0.55 : 0.8;
+        ctx.setLineDash(st.done ? [] : [2 / k, 7 / k]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        if (!st.done) {
+          ctx.fillStyle = col;
+          ctx.font = `${10 / k}px "IBM Plex Mono", monospace`;
+          ctx.textAlign = "center";
+          ctx.fillText(`도로 ${Math.round(prog * 100)}%`, (c.x + war.front[st.sector]!) / 2, (c.y + y) / 2 - 7 / k);
+        }
+      } else {
+        const owner = st.done ? fortController(w, st) : st.realm;
+        const oc = owner === "player" ? colP : colR;
+        const s = 9 / k;
+        ctx.beginPath();
+        ctx.rect(st.x - s, y - s, s * 2, s * 2);
+        if (st.done) {
+          ctx.fillStyle = oc;
+          ctx.fill();
+          ctx.strokeStyle = panel;
+          ctx.lineWidth = 2 / k;
+          ctx.stroke();
+          if (owner !== st.realm) {
+            ctx.fillStyle = panel;
+            ctx.font = `bold ${11 / k}px "Noto Sans KR", sans-serif`;
+            ctx.textAlign = "center";
+            ctx.fillText("!", st.x, y + 4 / k);
+          }
+        } else {
+          ctx.fillStyle = panel;
+          ctx.fill();
+          ctx.setLineDash([3 / k, 3 / k]);
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 2 / k;
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = col;
+          ctx.fillRect(st.x - s, y + s + 3 / k, s * 2 * prog, 4 / k);
+          ctx.strokeRect(st.x - s, y + s + 3 / k, s * 2, 4 / k);
+        }
+      }
+    }
+
     // 훈련 중인 병사: 수도 아래에 진행 상황을 보여 준다
     {
       const P = w.regions.find((r) => r.id === war.playerRegionId)!;

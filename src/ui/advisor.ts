@@ -3,7 +3,7 @@
  * "언제나 할 일이 있다"는 원칙(CLAUDE.md 원칙 0-2)을 위한 것이다. 모든 문장은 현재 상태에서 계산한다.
  */
 import { TURN_DAYS, dateOf, turnOf } from "../sim/calendar";
-import { HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "../sim/constants";
+import { FORT_DAYS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SOWING_DAY_OF_YEAR, UNIT_KM } from "../sim/constants";
 import { computePressure, frontXAt, sectorName, soldiersOf, totalAreaHa, trainingCount } from "../sim/war";
 import { dailyNeedKg, fieldFarmersAt } from "../sim/world";
 import type { TurnPreview, World } from "../sim/world";
@@ -24,6 +24,18 @@ export function advise(w: World, preview: TurnPreview | null = null): Advice[] {
   const { dayOfYear } = dateOf(w.day);
   void TURN_DAYS;
   const pr = computePressure(w);
+
+  // 건설 권유: 여름·겨울(농사와 겹치지 않는 때)에 공사가 비어 있고 밀리는 구간이 있으면
+  {
+    const season = turnOf(w.day).season;
+    const building = war.structures.filter((x) => x.realm === "player" && !x.done).length;
+    const pr0 = computePressure(w);
+    const worstNet0 = Math.min(...pr0.net);
+    if ((season === "여름" || season === "겨울") && building === 0 && worstNet0 < -8) {
+      const i = pr0.net.indexOf(worstNet0);
+      out.push({ level: "info", title: "지금이 건설하기 좋은 때", text: `${season}에는 농사 일손과 겹치지 않습니다. 밀리는 ${sectorName(i)}에 요새(${FORT_DAYS}일)를 지어 두면 다음 계절에 버틸 수 있습니다. 지도에서 그 점을 누르세요.` });
+    }
+  }
 
   // 1) 수도까지의 거리와 가장 위험한 구간
   const capP = war.capitals.player;

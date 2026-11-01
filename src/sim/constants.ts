@@ -161,10 +161,10 @@ export const MAX_CONCURRENT_BUILDS = 2;
  *  병력 밀도를 (1 + FORT_DENSITY_BONUS) 배까지 높인다. 전선이 요새를 넘으면 적이 차지해 효과가 적에게 간다. */
 export const FORT_WORKERS = 600;
 export const FORT_DAYS = 90;
-export const FORT_DENSITY_BONUS = 0.35;
+export const FORT_DENSITY_BONUS = 0.5;
 /** 요새 효과가 미치는 구간 수(점 개수)와 전선까지 거리(지도 단위). 효과는 거리와 구간 차이에 따라 선형으로 약해진다. */
 export const FORT_SPREAD_POINTS = 3;
-export const FORT_REACH_UNITS = 150;
+export const FORT_REACH_UNITS = 220;
 export const FORT_OFFSET_UNITS = 40;
 
 /** 도로: 수도에서 구간까지. 보급 한계 거리를 해당 구간 주변에서 (1 + ROAD_FALLOFF_BONUS) 배까지 늘린다. 임시. */

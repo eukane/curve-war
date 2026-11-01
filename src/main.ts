@@ -1,8 +1,9 @@
 import { WAR_REGIONS } from "./data/start-regions";
 import { TURN_DAYS, turnOf } from "./sim/calendar";
-import { EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
+import { FORT_DENSITY_BONUS, EDICT_RESEARCH_DAYS, EDICT_SLOTS, HARVEST_DAY_OF_YEAR, HA_PER_FARMER, SEASON_MOVE_MULT, SOWING_DAY_OF_YEAR, UNIT_KM } from "./sim/constants";
 import { EDICTS, cancelEdictResearch, edictOf, repealEdict, startEdict } from "./sim/edicts";
 import { profileOf } from "./sim/ai";
+import { KIND_NAME, buildInfo, canBuild, cancelBuild, fortMultipliers, roadFalloffMultipliers, startBuild } from "./sim/structures";
 import { EVENTS } from "./sim/events";
 import { computePressure, playerAreaHa, sectorName, soldiersOf, supplyMultipliers, totalAreaHa, trainingCount } from "./sim/war";
 import { createWorld, dailyNeedKg, disband, fieldFarmersAt, levy, popOf, previewTurn, setOrder, step, totalPop } from "./sim/world";
@@ -192,14 +193,17 @@ function renderTimers() {
 function renderSector() {
   const el = $("sector");
   if (selected === null) {
-    el.innerHTML = `<p class="mu" style="margin:0">지도에서 <b>전선의 점</b>을 누르거나 끌어 보세요. 끌면 그 구간과 이웃 구간의 명령선이 함께 움직이고, 병력이 거기에 몰립니다. 점을 두 번 누르면 그 점의 명령이 취소됩니다.</p>`;
+    el.innerHTML = `<p class="mu" style="margin:0">지도에서 <b>전선의 점</b>을 누르거나 끌어 보세요. 끌면 그 구간과 이웃 구간의 명령선이 함께 움직이고, 병력이 거기에 몰립니다. 점을 두 번 누르면 그 점의 명령이 취소됩니다. 점을 선택하면 그 구간에 요새와 도로를 지을 수 있습니다.</p>${buildListHtml()}`;
+    bindCancel(el);
     return;
   }
   const war = world.war!;
   const pr = computePressure(world);
   const i = selected;
-  const supP = supplyMultipliers(war.front, war.capitals.player.x, player().rules.supplyFalloffMult)[i]!;
-  const supR = supplyMultipliers(war.front, war.capitals.rival.x, rival().rules.supplyFalloffMult)[i]!;
+  const roads = roadFalloffMultipliers(world);
+  const forts = fortMultipliers(world);
+  const supP = supplyMultipliers(war.front, war.capitals.player.x, roads.player.map((m) => m * player().rules.supplyFalloffMult))[i]!;
+  const supR = supplyMultipliers(war.front, war.capitals.rival.x, roads.rival.map((m) => m * rival().rules.supplyFalloffMult))[i]!;
   const net = pr.net[i]!;
   const shiftKm = preview ? preview.shifts[i]! * UNIT_KM : 0;
   const order = war.orders.player[i]!;
@@ -210,19 +214,62 @@ function renderSector() {
       <dt>적 밀도</dt><dd>${fmt(pr.rivalDensity[i]!, 1)} 명/km</dd>
       <dt>차이</dt><dd class="${net > 1 ? "good" : net < -1 ? "bad" : ""}">${net > 0 ? "+" : ""}${fmt(net, 1)} 명/km</dd>
       <dt>보급 배율</dt><dd>우리 ${fmt(supP, 2)} · 적 ${fmt(supR, 2)}</dd>
+      ${forts.player[i]! > 1.005 || forts.rival[i]! > 1.005 ? `<dt>요새 효과</dt><dd>우리 ×${fmt(forts.player[i]!, 2)} · 적 ×${fmt(forts.rival[i]!, 2)}</dd>` : ""}
       <dt>명령선</dt><dd>${Math.abs(ahead) < 0.05 ? "현재 전선 유지" : `${ahead > 0 ? "앞으로" : "뒤로"} ${fmt(Math.abs(ahead), 1)}km`}</dd>
       <dt>이번 계절 예상</dt><dd class="${shiftKm > 0.05 ? "good" : shiftKm < -0.05 ? "bad" : ""}">${Math.abs(shiftKm) < 0.05 ? "움직임 없음" : `${shiftKm > 0 ? "전진" : "후퇴"} ${fmt(Math.abs(shiftKm), 1)}km`}</dd>
     </dl>
     <div class="row" style="margin-top:8px">
       <button id="sec-back">← 뒤로 12</button><button id="sec-fwd">앞으로 12 →</button><button id="sec-clear">명령 취소</button>
     </div>
+    ${buildHtml(i)}
     <p class="note" style="margin:6px 0 0">밀도 차이가 +이면 우리가 밀고, −이면 밀립니다. 명령선보다 앞으로는 나아가지 못합니다. 수도에서 멀수록 보급 배율이 떨어집니다.</p>`;
   $("sec-back").onclick = () => map.nudge(i, -12);
   $("sec-fwd").onclick = () => map.nudge(i, 12);
+  el.querySelectorAll<HTMLButtonElement>("button[data-build]").forEach((b) => b.addEventListener("click", () => {
+    const r = startBuild(world, "player", b.dataset.build as "fort" | "road", i);
+    if (r.ok) onOrdersChanged();
+  }));
+  bindCancel(el);
   $("sec-clear").onclick = () => {
     setOrder(world, i, war.front[i]!);
     onOrdersChanged();
   };
+}
+
+function buildListHtml(): string {
+  const mine = world.war!.structures.filter((s) => s.realm === "player");
+  if (mine.length === 0) return "";
+  return `<ul class="blist">${mine
+    .map((s) => `<li>${KIND_NAME[s.kind]} · 구간 ${s.sector + 1} · ${s.done ? "완공" : `공사 ${s.progressDays}/${s.totalDays}일`}${s.done ? "" : ` <button data-cancel="${s.id}" class="mini">취소</button>`}</li>`)
+    .join("")}</ul>`;
+}
+
+function bindCancel(el: HTMLElement) {
+  el.querySelectorAll<HTMLButtonElement>("button[data-cancel]").forEach((b) => b.addEventListener("click", () => {
+    const id = Number(b.dataset.cancel);
+    const st = world.war!.structures.find((x) => x.id === id);
+    if (st && st.progressDays > 0 && b.dataset.armed !== "1") {
+      b.dataset.armed = "1";
+      b.textContent = `정말? ${st.progressDays}일 분량이 사라짐`;
+      b.classList.add("danger");
+      return;
+    }
+    cancelBuild(world, "player", id);
+    onOrdersChanged();
+  }));
+}
+
+/** 선택한 구간의 건설 버튼: 비용(인부·기간)을 보여 주고, 못 짓는 이유는 비활성 버튼 옆에 글로 적는다 */
+function buildHtml(i: number): string {
+  const season = turnOf(world.day).season;
+  const busyField = season === "봄" || season === "가을";
+  const rows = (["fort", "road"] as const).map((kind) => {
+    const info = buildInfo(kind);
+    const can = canBuild(world, "player", kind, i);
+    const what = kind === "fort" ? `이 구간 병력 밀도 최대 +${Math.round(FORT_DENSITY_BONUS * 100)}% (전선이 요새에 가까울 때)` : "이 구간 보급이 멀리까지 닿음";
+    return `<div class="buildrow"><button data-build="${kind}" ${can.ok ? "" : "disabled"}>${KIND_NAME[kind]} 짓기</button><span class="mu">${what} · 인부 ${fmt(info.workers)}명 · ${info.days}일${can.ok ? "" : ` — <b>${esc(can.reason)}</b>`}</span></div>`;
+  });
+  return `<div class="builds"><h3>건설</h3>${rows.join("")}${busyField ? `<p class="note warnline">지금은 ${season} — 인부를 빼면 ${season === "봄" ? "파종" : "수확"} 일손이 줄어 곡식을 덜 거둡니다. 여름이나 겨울이 안전합니다.</p>` : ""}${buildListHtml()}</div>`;
 }
 
 function renderArmy() {

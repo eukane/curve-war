@@ -16,10 +16,13 @@ const aiProfile = process.env.AI_PROFILE;
 /** 플레이어가 처음부터 시행 중인 법령: PLAYER_EDICTS=fields,standing */
 const playerEdicts = (process.env.PLAYER_EDICTS ?? "").split(",").filter(Boolean);
 
+/** 플레이어 건설 정책: BUILD=fort,road (여름·겨울에 가장 밀리는 구간에 요새, 여름에 중앙 도로) */
+const playerBuild = (process.env.BUILD ?? "").split(",").filter(Boolean);
+
 const load = (p: string) => import(pathToFileURL(join(dir, p)).href);
 
 async function main() {
-  const [world, war, data, cal, edicts] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts"), load("sim/edicts.ts")]);
+  const [world, war, data, cal, edicts, structs] = await Promise.all([load("sim/world.ts"), load("sim/war.ts"), load("data/start-regions.ts"), load("sim/calendar.ts"), load("sim/edicts.ts"), load("sim/structures.ts")]);
   const { createWorld, step, levy, disband, setOrder, startClearing, totalPop } = world;
   const { soldiersOf, readySoldiers, playerAreaHa, totalAreaHa } = war;
   const { dateOf } = cal;
@@ -82,6 +85,18 @@ async function main() {
       let t = 0, stag = 0, last = playerAreaHa(w.war.front) / totalAreaHa();
       for (; t < maxTurns && !w.war.result; t++) {
         pol(w, t);
+        if (playerBuild.length) {
+          const season = dateOf(w.day).season;
+          if (season === "여름" || season === "겨울") {
+            if (playerBuild.includes("fort")) {
+              const net = war.computePressure(w).net;
+              let worst = 2;
+              for (let i = 2; i < net.length - 2; i++) if (net[i] < net[worst]) worst = i;
+              if (net[worst] < -8) structs.startBuild(w, "player", "fort", worst);
+            }
+            if (playerBuild.includes("road") && season === "여름") structs.startBuild(w, "player", "road", 8);
+          }
+        }
         step(w, 90);
         const a = playerAreaHa(w.war.front) / totalAreaHa();
         if (Math.abs(a - last) < 0.003) stag++;

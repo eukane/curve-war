@@ -109,6 +109,13 @@
     .adv .danger { border-color:var(--bad); } .adv .danger b { color:var(--bad); }
     .adv .warn { border-color:var(--warn); } .adv .warn b { color:var(--warn); }
     .adv .chance { border-color:var(--chance); } .adv .chance b { color:var(--chance); }
+    .builds { margin-top:10px; padding-top:8px; border-top:1px solid var(--line); }
+    .builds h3 { margin:0 0 6px; font-size:13px; }
+    .buildrow { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin-bottom:6px; font-size:12px; }
+    .buildrow button:disabled { opacity:.5; cursor:not-allowed; }
+    .warnline { color:var(--warn, var(--bad)); }
+    .blist { list-style:none; margin:6px 0 0; padding:0; font-size:12px; display:grid; gap:4px; }
+    button.mini { padding:1px 8px; font-size:11px; margin-left:6px; }
     .kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:2px 12px; font-size:13px; }
     .kv dt { color:var(--mu); } .kv dd { margin:0; text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
     .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
